@@ -9,6 +9,8 @@ type Query =
 
 export type Ref = { sourceId: string; name: string }
 
+export const SEARCH_PAGE = 200
+
 export interface SearchApi {
   results: Result[]
   total: number | null
@@ -21,6 +23,10 @@ export interface SearchApi {
   hasGeo: boolean
   hasRun: boolean
   labelState: Record<string, string>
+  loadingMore: boolean
+  hasMore: boolean
+  searchDepthCap: number | null
+  loadMore: () => void
   setScoreRange: (r: [number, number]) => void
   setView: (v: 'grid' | 'map') => void
   search: (opts: { query?: string; imageBytes?: ArrayBuffer }) => void
@@ -45,6 +51,10 @@ export function useSearch(): SearchApi {
   const [view, setView] = useState<'grid' | 'map'>('grid')
   const [labelState, setLabelState] = useState<Record<string, string>>({})
   const [hasRun, setHasRun] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [hasMore, setHasMore] = useState(false)
+  const [searchDepthCap, setSearchDepthCap] = useState<number | null>(null)
+  const reqId = useRef(0)
   const lastQuery = useRef<Query | null>(null)
   const hasGeo = results.some((r) => r.lat != null && r.lon != null)
 
@@ -58,9 +68,20 @@ export function useSearch(): SearchApi {
     setLabelState(mapped)
   }, [])
 
+  // like refreshLabelState but merges (for appended pages) instead of replacing
+  const mergeLabelState = useCallback(async (rows: Result[]) => {
+    if (!rows.length) return
+    const keys = rows.map((r) => [r.sourceId, r.name] as [string, string])
+    const raw = await window.api.labelState(keys)
+    const add: Record<string, string> = {}
+    for (const [k, v] of Object.entries(raw)) add[k.replace('\u0000', ' ')] = v
+    setLabelState((s) => ({ ...s, ...add }))
+  }, [])
+
   const runSearch = useCallback(
     async (q: Query, range: [number, number], sel: Set<string>) => {
       lastQuery.current = q
+      const myReq = ++reqId.current
       setBusy(true)
       setHasRun(true)
       try {
@@ -68,7 +89,8 @@ export function useSearch(): SearchApi {
           sources: sel.size ? [...sel] : undefined,
           minScore: range[0] > 0 ? range[0] : undefined,
           maxScore: range[1] < 1 ? range[1] : undefined,
-          limit: 200
+          from: 0,
+          limit: SEARCH_PAGE
         }
         const params =
           q.kind === 'text'
@@ -77,18 +99,53 @@ export function useSearch(): SearchApi {
               ? { ...base, imageBytes: q.imageBytes }
               : { ...base, ref: q.ref }
         const res = await window.api.search(params)
+        if (myReq !== reqId.current) return
         setResults(res.results)
         setTotal(res.total)
         setBelowWindow(res.belowWindow)
+        setSearchDepthCap(res.k)
+        setHasMore(res.results.length === SEARCH_PAGE)
         refreshLabelState(res.results)
       } catch (e) {
-        toast.error(String(e))
+        if (myReq === reqId.current) toast.error(String(e))
       } finally {
-        setBusy(false)
+        if (myReq === reqId.current) setBusy(false)
       }
     },
     [refreshLabelState]
   )
+
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return
+    const q = lastQuery.current
+    if (!q) return
+    const myReq = reqId.current // a new search bumps this; bail if so
+    setLoadingMore(true)
+    try {
+      const base = {
+        sources: selected.size ? [...selected] : undefined,
+        minScore: scoreRange[0] > 0 ? scoreRange[0] : undefined,
+        maxScore: scoreRange[1] < 1 ? scoreRange[1] : undefined,
+        from: results.length,
+        limit: SEARCH_PAGE
+      }
+      const params =
+        q.kind === 'text'
+          ? { ...base, query: q.query }
+          : q.kind === 'image'
+            ? { ...base, imageBytes: q.imageBytes }
+            : { ...base, ref: q.ref }
+      const res = await window.api.search(params)
+      if (myReq !== reqId.current) return
+      setResults((prev) => [...prev, ...res.results])
+      setHasMore(res.results.length === SEARCH_PAGE)
+      mergeLabelState(res.results)
+    } catch (e) {
+      if (myReq === reqId.current) toast.error(String(e))
+    } finally {
+      if (myReq === reqId.current) setLoadingMore(false)
+    }
+  }, [loadingMore, hasMore, selected, scoreRange, results.length, mergeLabelState])
 
   const search = useCallback(
     (opts: { query?: string; imageBytes?: ArrayBuffer }) => {
@@ -145,6 +202,10 @@ export function useSearch(): SearchApi {
     hasGeo,
     hasRun,
     labelState,
+    loadingMore,
+    hasMore,
+    searchDepthCap,
+    loadMore,
     setScoreRange,
     setView,
     search,
