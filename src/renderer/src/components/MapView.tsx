@@ -17,10 +17,26 @@ export function MapView({
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return
     const map = L.map(containerRef.current, { center: [20, 0], zoom: 2, minZoom: 0, maxZoom: 22 })
-    // Basemap drawn from the user's own tiles via the sidecar-resolved app://basemap.
+
+    // Street basemap underneath (CARTO), so there's always a visible map even when
+    // zoomed out below the source's native zoom, where the local imagery is transparent.
+    // Matches the app theme; dark is the default, `.light` on the root swaps to light.
+    const light = document.documentElement.classList.contains('light')
+    L.tileLayer(
+      `https://{s}.basemaps.cartocdn.com/${light ? 'light_all' : 'dark_all'}/{z}/{x}/{y}{r}.png`,
+      {
+        subdomains: 'abcd',
+        maxZoom: 22,
+        attribution: '&copy; OpenStreetMap &copy; CARTO'
+      }
+    ).addTo(map)
+
+    // The user's own imagery, drawn on top via the sidecar-resolved app://basemap.
+    // maxNativeZoom = the embed zoom (19): Leaflet upscales past it client-side instead
+    // of requesting tiles the sidecar would only over-zoom-crop; gaps fall through to CARTO.
     L.tileLayer('app://basemap/{z}/{x}/{y}', {
       tileSize: 256,
-      maxNativeZoom: 22,
+      maxNativeZoom: 19,
       noWrap: true
     }).addTo(map)
     layerRef.current = L.layerGroup().addTo(map)

@@ -27,6 +27,14 @@ const TRANSPARENT_PNG = Buffer.from(
 const basemapCache = new Map<string, Buffer>()
 const BASEMAP_CACHE_MAX = 2048
 
+/** A basemap gap or an unrenderable tile: always a transparent 200, never a 500 — a
+ *  500 makes Leaflet retry the tile forever and floods the console. */
+function transparentTile(): Response {
+  return new Response(new Uint8Array(TRANSPARENT_PNG), {
+    headers: { 'content-type': 'image/png' }
+  })
+}
+
 export function clearBasemapCache(): void {
   basemapCache.clear()
 }
@@ -97,33 +105,45 @@ async function serveBasemap(url: URL, client: SidecarClient): Promise<Response> 
   if (cached) return new Response(new Uint8Array(cached), { headers: { 'content-type': 'image/png' } })
 
   const { file, crop, composite } = await client.resolveTile(z, x, y)
-  const sharp = (await import('sharp')).default
-  let png: Buffer
 
-  if (composite && composite.length > 0) {
-    // under-zoom: downscale-composite native descendant tiles into one 256px tile
-    const layers = await Promise.all(
-      composite.map(async ({ file: f, dst }) => {
-        const [left, top, size] = dst
-        const buf = await sharp(f).resize(size, size).png().toBuffer()
-        return { input: buf, left, top }
+  // A gap (no imagery at this z/x/y — e.g. zoomed out below the source's native zoom)
+  // is the common case, not an error: return the transparent tile WITHOUT touching
+  // sharp. Importing/rendering only happens when there's actually pixels to produce.
+  const hasComposite = composite && composite.length > 0
+  if (!hasComposite && !file) return transparentTile()
+
+  // Any render failure (unreadable file, out-of-bounds crop, sharp issue) degrades to a
+  // transparent tile — never a 500. Leaflet retries 500s indefinitely, so a single bad
+  // tile would otherwise flood the console and hammer the sidecar.
+  let png: Buffer
+  try {
+    const sharp = (await import('sharp')).default
+    if (hasComposite) {
+      // under-zoom: downscale-composite native descendant tiles into one 256px tile
+      const layers = await Promise.all(
+        composite!.map(async ({ file: f, dst }) => {
+          const [left, top, size] = dst
+          const buf = await sharp(f).resize(size, size).png().toBuffer()
+          return { input: buf, left, top }
+        })
+      )
+      png = await sharp({
+        create: { width: 256, height: 256, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } }
       })
-    )
-    png = await sharp({
-      create: { width: 256, height: 256, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } }
-    })
-      .composite(layers)
-      .png()
-      .toBuffer()
-  } else if (file) {
-    let img = sharp(file)
-    if (crop && crop.length === 3) {
-      const [left, top, size] = crop
-      img = img.extract({ left, top, width: size, height: size }).resize(256, 256)
+        .composite(layers)
+        .png()
+        .toBuffer()
+    } else {
+      let img = sharp(file!)
+      if (crop && crop.length === 3) {
+        const [left, top, size] = crop
+        img = img.extract({ left, top, width: size, height: size }).resize(256, 256)
+      }
+      png = await img.png().toBuffer()
     }
-    png = await img.png().toBuffer()
-  } else {
-    return new Response(new Uint8Array(TRANSPARENT_PNG), { headers: { 'content-type': 'image/png' } })
+  } catch (e) {
+    console.warn('[basemap] render failed, serving transparent:', key, String(e))
+    return transparentTile()
   }
 
   if (basemapCache.size > BASEMAP_CACHE_MAX) basemapCache.clear()
@@ -153,7 +173,14 @@ export function registerAppProtocol(): void {
       }
       if (url.host === 'basemap') {
         if (!_client) return new Response('starting', { status: 503 })
-        return await serveBasemap(url, _client)
+        // Basemap never 500s: a resolve/render failure degrades to a transparent tile
+        // so Leaflet doesn't retry-storm a 500 across the whole viewport.
+        try {
+          return await serveBasemap(url, _client)
+        } catch (e) {
+          console.warn('[basemap] resolve failed, serving transparent:', request.url, String(e))
+          return transparentTile()
+        }
       }
       return new Response('not found', { status: 404 })
     } catch (e) {
