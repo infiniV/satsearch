@@ -1,0 +1,40 @@
+appId: com.satsearch.app
+productName: satsearch
+directories:
+  buildResources: build
+  output: dist
+
+# The Python sidecar (source + CI-pre-built .venv) ships as extraResources — NOT inside
+# the asar. child_process.spawn cannot execute an interpreter packed in app.asar
+# (research §3). Accessed at runtime via process.resourcesPath/sidecar.
+files:
+  - out/**
+  - package.json
+  - '!sidecar/**'
+
+extraResources:
+  - from: sidecar
+    to: sidecar
+    filter:
+      - '**/*'
+      - '!**/__pycache__/**'
+      - '!**/*.pyc'
+      - '!**/tests/**'
+
+# Native .node addons (sharp) must be unpacked so they can be loaded at runtime.
+asarUnpack:
+  - '**/*.node'
+  - '**/node_modules/sharp/**'
+
+linux:
+  target:
+    - AppImage
+  category: Science
+
+win:
+  target:
+    - nsis
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true

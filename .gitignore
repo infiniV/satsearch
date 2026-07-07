@@ -1,0 +1,66 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# Electron builder artifacts
+release/
+*.exe
+*.dmg
+*.AppImage
+*.deb
+*.snap
+*.blockmap
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Caches
+.cache/
+.eslintcache
+.vite/
+*.local
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python sidecar (uv / venv)
+sidecar/.venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Model / data files (large, generated)
+*.onnx
+*.pt
+*.bin
+*.safetensors
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Project docs (local only)
+docs/superpowers/
+
+# Editor / IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp

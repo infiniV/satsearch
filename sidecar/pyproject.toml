@@ -1,0 +1,42 @@
+[project]
+name = "satsearch-sidecar"
+version = "0.1.0"
+description = "satsearch GPU sidecar — SigLIP2 CUDA fp16 search over satellite tiles"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.34",
+  "python-multipart>=0.0.9",
+  "pillow",
+  "numpy>=2.5",
+  "pandas",
+  "pyarrow",
+]
+
+# GPU inference stack. Kept as an optional group so `uv sync` (core + dev) runs
+# without a multi-GB CUDA download; unit tests mock the model. Real inference:
+#   uv sync --group gpu
+# torch/torchvision resolve from the cu126 wheel index (cu124 was dropped in 2.11).
+[dependency-groups]
+dev = ["pytest>=8", "httpx>=0.27"]
+gpu = [
+  "torch==2.11.0",
+  "torchvision==0.26.0",
+  "transformers>=5.0,<6",
+  "sentencepiece",
+  "protobuf",
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+torchvision = { index = "pytorch-cu126" }
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
