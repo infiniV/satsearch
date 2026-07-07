@@ -3,10 +3,14 @@
 import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { SidecarClient } from './services/api'
 import type { SourcesCache } from './services/sources'
 import { resolveThumbAbs } from './protocol'
-import type { TileMeta, TileSort } from '@shared/types'
+import type { ImportPreview, TileMeta, TileSort } from '@shared/types'
+
+/** satImg importer checkpoint — matches the app's active SigLIP2 model. */
+const SATIMG_CHECKPOINT = 'google/siglip2-so400m-patch16-256'
 
 /** Sniff whether a folder looks like an XYZ pyramid ({z}/{x}/{y}.img) or plain. */
 export function detectKind(dir: string): 'xyz' | 'plain' {
@@ -51,6 +55,8 @@ export function registerIpc(getReady: () => Promise<IpcDeps>): void {
 
   on('health', ({ client }) => client.health())
 
+  on('settings', ({ client }) => client.settings())
+
   on('search', ({ client }, params: Parameters<SidecarClient['search']>[0]) =>
     client.search(params)
   )
@@ -88,15 +94,46 @@ export function registerIpc(getReady: () => Promise<IpcDeps>): void {
     shell.openPath(resolveThumbAbs(thumbUrl, sources))
   )
 
-  on('sources:pickAndAdd', async ({ client, sources }) => {
+  // Preview-then-confirm import (spec: import-preview). The picked absolute path stays
+  // in the main process, keyed by an opaque token; the renderer only ever holds the
+  // token, so `confirmAdd` never trusts a renderer-supplied path.
+  type Pending = { kind: 'xyz' | 'plain' | 'satimg'; dir: string; folderName: string }
+  const pending = new Map<string, Pending>()
+
+  on('sources:pick', async (_deps, mode: 'folder' | 'satimg') => {
     const win = BrowserWindow.getFocusedWindow() ?? undefined
     const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory'] })
     if (r.canceled || !r.filePaths[0]) return null
     const dir = r.filePaths[0]
-    const kind = detectKind(dir)
-    const res = await client.addSource(kind, dir)
+    const kind = mode === 'satimg' ? 'satimg' : detectKind(dir)
+    const folderName = path.basename(dir.replace(/[/\\]+$/, '')) || dir
+    const token = randomUUID()
+    pending.set(token, { kind, dir, folderName })
+    return { token, kind, folderName }
+  })
+
+  on('sources:scan', async ({ client }, token: string): Promise<ImportPreview> => {
+    const p = pending.get(token)
+    if (!p) throw new Error('scan: unknown or expired pick token')
+    const scan = await client.scanSource(p.kind, p.dir)
+    return { ...scan, token, folderName: p.folderName, rootPath: p.dir }
+  })
+
+  on('sources:confirmAdd', async ({ client, sources }, token: string) => {
+    const p = pending.get(token)
+    if (!p) throw new Error('confirmAdd: unknown or expired pick token')
+    const res =
+      p.kind === 'satimg'
+        ? await client.importSatimg(p.dir, SATIMG_CHECKPOINT)
+        : await client.addSource(p.kind, p.dir)
+    // Consume the token only once the job is enqueued, so a failed add can be retried.
+    pending.delete(token)
     await sources.refresh()
-    return { ...res, kind, path: dir }
+    return { ...res, kind: p.kind, path: p.dir }
+  })
+
+  on('sources:cancelPick', (_deps, token: string) => {
+    pending.delete(token)
   })
 
   on('sources:delete', async ({ client, sources }, id: string) => {
@@ -116,15 +153,6 @@ export function registerIpc(getReady: () => Promise<IpcDeps>): void {
 
   on('sources:reconcile', ({ client }, id: string) => client.reconcileSource(id))
   on('sources:reembed', ({ client }, id: string) => client.reembedSource(id))
-
-  on('sources:importSatimg', async ({ client, sources }, checkpoint: string) => {
-    const win = BrowserWindow.getFocusedWindow() ?? undefined
-    const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory'] })
-    if (r.canceled || !r.filePaths[0]) return null
-    const res = await client.importSatimg(r.filePaths[0], checkpoint)
-    await sources.refresh()
-    return res
-  })
 
   on('jobs:list', ({ client }) => client.listJobs())
   on('jobs:cancel', ({ client }, id: string) => client.cancelJob(id))

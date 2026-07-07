@@ -177,7 +177,8 @@ def _meta_frame(batch_rows):
 def run_ingest(source: Source, model: Model, store: Store, jobs: Jobs,
                emb_dir: str, job_id: str, batch_size: Optional[int] = None,
                kind: str = "ingest",
-               on_downgrade: Optional[Callable[[int], None]] = None) -> None:
+               on_downgrade: Optional[Callable[[int], None]] = None,
+               throughput_path: Optional[str] = None, device: str = "cpu") -> None:
     rows, _embed_zoom = _rows_for_source(source)
     total = len(rows)
     os.makedirs(emb_dir, exist_ok=True)
@@ -284,6 +285,7 @@ def run_ingest(source: Source, model: Model, store: Store, jobs: Jobs,
 
     last_progress = time.monotonic()
     win_done, win_t0 = 0, time.monotonic()
+    run_t0, embedded0 = time.monotonic(), done  # for learned-throughput on completion
     pump = _prefetch(groups(), prepare, num_workers, prefetch_depth)
     try:
         for group, (prepared, stats) in pump:
@@ -318,4 +320,13 @@ def run_ingest(source: Source, model: Model, store: Store, jobs: Jobs,
     peak = _cuda_peak_gb()
     if peak is not None:
         log.info("%s done: source=%s peak VRAM %.2f GiB", kind, source.id, peak)
+    # Persist average throughput (this run's embedded tiles / wall time) so the next
+    # import's time estimate is measured rather than heuristic. Skipped on resumes that
+    # embedded nothing, or when no path was supplied (tests).
+    if throughput_path:
+        elapsed = time.monotonic() - run_t0
+        embedded = done - embedded0
+        if embedded > 0 and elapsed > 0:
+            from . import preview
+            preview.record_throughput(throughput_path, device, embedded / elapsed)
     hot_load("done")

@@ -11,6 +11,28 @@ export interface TileLayout {
   yScheme: 'xyz' | 'tms'
 }
 
+/** Preview of a picked folder, shown in the import-confirm modal before ingesting. */
+export interface ImportPreview {
+  /** Opaque handle for the pending pick; the picked path stays in the main process. */
+  token: string
+  kind: SourceKind
+  folderName: string
+  rootPath: string
+  /** Images that will actually be embedded (XYZ: deepest zoom only). */
+  imageCount: number
+  /** Size on disk of the embeddable set; sampled+scaled for large corpora. */
+  totalBytes: number
+  approxBytes: boolean
+  /** Rough embed time in seconds, or null if not computable. */
+  estSeconds: number | null
+  /** 'measured' from a past run on this device, or 'heuristic' first-run fallback. */
+  estBasis: 'measured' | 'heuristic' | null
+  /** XYZ pyramids: per-zoom tile counts, with the embed zoom flagged. */
+  zoomBreakdown?: { zoom: number; count: number; embeds: boolean }[]
+  /** Plain folders: top-level subfolder image counts. */
+  subfolders?: { name: string; count: number }[]
+}
+
 export interface Source {
   id: string
   label: string
@@ -134,6 +156,45 @@ export interface HealthStatus {
   /** Auto-resolved embed batch size for this GPU (null = CPU fallback). */
   batchSize?: number | null
   error?: string
+}
+
+/** Read-only app settings (sidecar `GET /settings`). v1 is display-only — the active
+ *  model, the runtime it loaded on, and rolled-up corpus/label/storage stats. Model
+ *  switching is future work (`model.switchable` is false; `availableModels` lists the
+ *  one loaded), so the picker can render disabled without a later contract change. */
+export interface ModelSpec {
+  checkpoint_id: string
+  hf_revision: string
+  image_size: number
+  resize_mode: string
+  norm_mean: number[]
+  norm_std: number[]
+  tokenizer_max_length: number
+  pooling: string
+  preprocessing_impl: { transformers: string; torchvision: string; pillow: string }
+}
+
+export interface SettingsInfo {
+  model: {
+    checkpoint: string
+    device: string
+    dims: number
+    fingerprint: string
+    spec: ModelSpec | null
+    switchable: boolean
+  }
+  availableModels: { checkpoint: string; active: boolean }[]
+  runtime: {
+    device: string
+    gpuName?: string | null
+    vram?: number | null
+    capability?: string | null
+    batchSize?: number | null
+    sidecarVersion: string
+  }
+  index: { sources: number; tiles: number; geolocated: number; snapshotId: string }
+  labels: { classes: number; tagged: number }
+  storage: { dataDir: string }
 }
 
 export interface SearchParams {

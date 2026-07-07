@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { FolderPlus, Trash2, Download, Link2, RefreshCw, Images } from 'lucide-react'
 import { toast } from 'sonner'
-import type { Source } from '@shared/types'
+import type { ImportPreview, Source } from '@shared/types'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { ImportPreviewDialog } from '@/components/ImportPreviewDialog'
 
 export function SourcesView({
   sources,
@@ -15,26 +16,61 @@ export function SourcesView({
   onBrowse: (sourceId: string) => void
 }) {
   const [busy, setBusy] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
+  const [preview, setPreview] = useState<ImportPreview | null>(null)
+  const [scanning, setScanning] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const tokenRef = useRef<string | null>(null)
 
-  async function addFolder(): Promise<void> {
+  // Pick → scan → confirm. The picked path lives in the main process, keyed by token;
+  // cancelling releases it, confirming consumes it and starts the embed job.
+  async function beginImport(mode: 'folder' | 'satimg'): Promise<void> {
     setBusy(true)
     try {
-      const r = await window.api.pickAndAddSource()
-      if (r) toast.success('Source added — embedding started')
-      onChanged()
+      const picked = await window.api.pickSource(mode)
+      if (!picked) return
+      tokenRef.current = picked.token
+      setPreview(null)
+      setScanning(true)
+      setImportOpen(true)
+      try {
+        setPreview(await window.api.scanSource(picked.token))
+      } catch {
+        toast.error('Could not read that folder')
+        void closeImport()
+      } finally {
+        setScanning(false)
+      }
     } finally {
       setBusy(false)
     }
   }
 
-  async function importSatimg(): Promise<void> {
-    setBusy(true)
+  async function closeImport(): Promise<void> {
+    const t = tokenRef.current
+    tokenRef.current = null
+    setImportOpen(false)
+    setPreview(null)
+    if (t) await window.api.cancelPick(t).catch(() => {})
+  }
+
+  async function confirmImport(): Promise<void> {
+    const t = tokenRef.current
+    if (!t) return
+    setConfirming(true)
     try {
-      const r = await window.api.importSatimg('google/siglip2-so400m-patch16-256')
-      if (r) toast.success('satImg import started')
+      const r = await window.api.confirmAddSource(t)
+      tokenRef.current = null
+      setImportOpen(false)
+      setPreview(null)
+      toast.success(
+        r.kind === 'satimg' ? 'satImg import started' : 'Source added — embedding started'
+      )
       onChanged()
+    } catch {
+      toast.error('Import failed')
     } finally {
-      setBusy(false)
+      setConfirming(false)
     }
   }
 
@@ -69,10 +105,10 @@ export function SourcesView({
           </p>
         </div>
         <div className="flex gap-2">
-          <Button onClick={addFolder} disabled={busy}>
+          <Button onClick={() => beginImport('folder')} disabled={busy}>
             <FolderPlus className="h-4 w-4" /> Add folder
           </Button>
-          <Button variant="secondary" onClick={importSatimg} disabled={busy}>
+          <Button variant="secondary" onClick={() => beginImport('satimg')} disabled={busy}>
             <Download className="h-4 w-4" /> Import satImg
           </Button>
         </div>
@@ -153,6 +189,17 @@ export function SourcesView({
           ))}
         </div>
       )}
+
+      <ImportPreviewDialog
+        open={importOpen}
+        onOpenChange={(o) => {
+          if (!o) void closeImport()
+        }}
+        preview={preview}
+        scanning={scanning}
+        confirming={confirming}
+        onConfirm={confirmImport}
+      />
     </div>
   )
 }

@@ -35,13 +35,21 @@ def _l2(x: np.ndarray) -> np.ndarray:
 
 
 class Model:
-    def __init__(self, backend, fingerprint: str):
+    def __init__(self, backend, fingerprint: str, spec: dict | None = None):
         self._b = backend
         self._fingerprint = fingerprint
+        # Canonical model_spec() dict the fingerprint was hashed from — surfaced by
+        # the /settings endpoint (image size, preprocessing lib versions). None for
+        # the test fake, which fingerprints a literal string.
+        self._spec = spec
 
     @property
     def fingerprint(self) -> str:
         return self._fingerprint
+
+    @property
+    def spec(self) -> dict | None:
+        return self._spec
 
     @property
     def dims(self) -> int:
@@ -171,4 +179,4 @@ def load_model(checkpoint_id: str = DEFAULT_CHECKPOINT, device: str = "cuda") ->
     backend.device = device
     backend.logit_scale = logit_scale
     backend.logit_bias = logit_bias
-    return Model(backend=backend, fingerprint=fp)
+    return Model(backend=backend, fingerprint=fp, spec=spec)

@@ -1,5 +1,17 @@
 // Token-authed HTTP client to the sidecar (spec §2). Used only by the main process.
-import type { BrowseResponse, HealthStatus, Job, SearchResponse, Source, TileSort } from '@shared/types'
+import type {
+  BrowseResponse,
+  HealthStatus,
+  ImportPreview,
+  Job,
+  SearchResponse,
+  SettingsInfo,
+  Source,
+  TileSort
+} from '@shared/types'
+
+/** Scan result from the sidecar — the main process adds token/folderName/rootPath. */
+export type ScanResult = Omit<ImportPreview, 'token' | 'folderName' | 'rootPath'>
 
 export interface AddSourceResult {
   jobId: string
@@ -28,6 +40,10 @@ export class SidecarClient {
 
   async health(): Promise<HealthStatus> {
     return this.json(await this.fetchImpl(`${this.base()}/health`, { headers: this.auth() }))
+  }
+
+  async settings(): Promise<SettingsInfo> {
+    return this.json(await this.fetchImpl(`${this.base()}/settings`, { headers: this.auth() }))
   }
 
   async search(params: {
@@ -71,6 +87,17 @@ export class SidecarClient {
         `${this.base()}/sources/${encodeURIComponent(sourceId)}/tiles?${q}`,
         { headers: this.auth() }
       )
+    )
+  }
+
+  /** Preview a folder before importing. `kind` is 'satimg' for the satImg importer. */
+  async scanSource(kind: 'xyz' | 'plain' | 'satimg', path: string): Promise<ScanResult> {
+    return this.json(
+      await this.fetchImpl(`${this.base()}/sources/scan`, {
+        method: 'POST',
+        headers: { ...this.auth(), 'content-type': 'application/json' },
+        body: JSON.stringify({ kind, path })
+      })
     )
   }
 

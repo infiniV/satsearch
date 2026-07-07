@@ -50,6 +50,121 @@ def test_health_requires_token(tmp_path):
     assert body["ready"] is True and body["dims"] == 8 and body["fingerprint"] == "fp"
 
 
+def test_settings_reports_model_and_stats(tmp_path):
+    client, cfg = make_client(tmp_path)
+    assert client.get("/settings").status_code == 401  # token-gated like every route
+    body = client.get("/settings", headers=_auth()).json()
+    # active model (display-only in v1; switching is future work)
+    assert body["model"]["checkpoint"] == cfg.checkpoint
+    assert body["model"]["dims"] == 8
+    assert body["model"]["fingerprint"] == "fp"
+    assert body["model"]["switchable"] is False
+    assert body["model"]["spec"] is None  # fake backend has no canonical spec
+    assert [m["checkpoint"] for m in body["availableModels"]] == [cfg.checkpoint]
+    # rolled-up stats — empty corpus to start
+    assert body["index"] == {
+        "sources": 0, "tiles": 0, "geolocated": 0, "snapshotId": "empty-0"
+    }
+    assert body["labels"] == {"classes": 0, "tagged": 0}
+    assert body["storage"]["dataDir"] == cfg.data_dir
+    assert body["runtime"]["device"] == "cpu"
+
+
+def test_settings_stats_track_corpus_and_labels(tmp_path):
+    client, _cfg = make_client(tmp_path)
+    imgs = tmp_path / "imgs"
+    imgs.mkdir()
+    for i in range(3):
+        Image.new("RGB", (4, 4)).save(imgs / f"{i}.jpg")
+    job_id = client.post("/sources", json={"kind": "plain", "path": str(imgs)},
+                         headers=_auth()).json()["jobId"]
+    for _ in range(100):
+        if client.get(f"/jobs/{job_id}", headers=_auth()).json()["state"] == "done":
+            break
+        time.sleep(0.02)
+    client.post("/labels", json={"sourceId": "s", "tile": "0.jpg", "label": "kiln"},
+                headers=_auth())
+    body = client.get("/settings", headers=_auth()).json()
+    assert body["index"]["sources"] == 1
+    assert body["index"]["tiles"] == 3
+    assert body["labels"]["classes"] == 1
+    assert body["labels"]["tagged"] == 1
+
+
+def test_scan_plain_folder(tmp_path):
+    client, _ = make_client(tmp_path)
+    imgs = tmp_path / "imgs"
+    (imgs / "a").mkdir(parents=True)
+    (imgs / "b").mkdir(parents=True)
+    for i in range(3):
+        Image.new("RGB", (4, 4)).save(imgs / "a" / f"{i}.jpg")
+    Image.new("RGB", (4, 4)).save(imgs / "b" / "x.jpg")
+    body = client.post("/sources/scan", json={"kind": "plain", "path": str(imgs)},
+                       headers=_auth()).json()
+    assert body["kind"] == "plain"
+    assert body["imageCount"] == 4
+    assert body["totalBytes"] > 0 and body["approxBytes"] is False
+    assert {s["name"]: s["count"] for s in body["subfolders"]} == {"a": 3, "b": 1}
+    # no throughput learned yet → heuristic estimate
+    assert body["estBasis"] == "heuristic" and body["estSeconds"] >= 0
+
+
+def test_scan_xyz_flags_embed_zoom(tmp_path):
+    client, _ = make_client(tmp_path)
+    root = tmp_path / "pyr"
+    # z12: 1 tile, z13: 4 tiles — deepest (z13) is what gets embedded
+    (root / "12" / "0").mkdir(parents=True)
+    Image.new("RGB", (8, 8)).save(root / "12" / "0" / "0.jpg")
+    for x in range(2):
+        d = root / "13" / str(x)
+        d.mkdir(parents=True)
+        for y in range(2):
+            Image.new("RGB", (8, 8)).save(d / f"{y}.jpg")
+    body = client.post("/sources/scan", json={"kind": "xyz", "path": str(root)},
+                       headers=_auth()).json()
+    assert body["kind"] == "xyz"
+    assert body["imageCount"] == 4  # only z13
+    by_zoom = {z["zoom"]: z for z in body["zoomBreakdown"]}
+    assert by_zoom[12]["count"] == 1 and by_zoom[12]["embeds"] is False
+    assert by_zoom[13]["count"] == 4 and by_zoom[13]["embeds"] is True
+
+
+def test_scan_satimg_counts_ges_tiles(tmp_path):
+    client, _ = make_client(tmp_path)
+    root = tmp_path / "city"
+    root.mkdir()
+    Image.new("RGB", (8, 8)).save(root / "ges_370059_307655_20.jpg")
+    Image.new("RGB", (8, 8)).save(root / "ges_370060_307655_20.jpg")
+    (root / "notes.txt").write_text("skip me")
+    body = client.post("/sources/scan", json={"kind": "satimg", "path": str(root)},
+                       headers=_auth()).json()
+    assert body["kind"] == "satimg-import"
+    assert body["imageCount"] == 2  # non-ges file ignored
+
+
+def test_scan_uses_measured_throughput(tmp_path):
+    client, cfg = make_client(tmp_path)
+    # a prior run on this device (cpu) recorded 5 tiles/s
+    from satsearch_sidecar import preview as preview_mod
+    preview_mod.record_throughput(cfg.throughput_json, "cpu", 5.0)
+    imgs = tmp_path / "imgs"
+    imgs.mkdir()
+    for i in range(20):
+        Image.new("RGB", (4, 4)).save(imgs / f"{i}.jpg")
+    body = client.post("/sources/scan", json={"kind": "plain", "path": str(imgs)},
+                       headers=_auth()).json()
+    assert body["estBasis"] == "measured"
+    assert body["estSeconds"] == 4  # 20 tiles / 5 tiles/s = 4s
+
+
+def test_scan_rejects_bad_input(tmp_path):
+    client, _ = make_client(tmp_path)
+    assert client.post("/sources/scan", json={"kind": "nope", "path": str(tmp_path)},
+                       headers=_auth()).status_code == 400
+    assert client.post("/sources/scan", json={"kind": "plain", "path": str(tmp_path / "ghost")},
+                       headers=_auth()).status_code == 400
+
+
 def test_add_source_then_search(tmp_path):
     client, _cfg = make_client(tmp_path)
     imgs = tmp_path / "imgs"

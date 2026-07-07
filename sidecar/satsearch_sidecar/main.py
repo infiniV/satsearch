@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from datetime import datetime, timezone
 
-from . import geo, gpu, ingest as ingest_mod, maintenance
+from . import geo, gpu, ingest as ingest_mod, maintenance, preview as preview_mod
 from .config import Config
 from .ingest import run_ingest
 from .jobs import Jobs
@@ -72,6 +72,13 @@ def create_app(deps: Deps) -> FastAPI:
     app = FastAPI(title="satsearch sidecar")
     d = deps
 
+    def _device_key() -> str:
+        """Stable throughput key: the GPU model name, else the runtime device string."""
+        return (d.gpu_info.name if d.gpu_info else None) or d.model.device
+
+    def _has_gpu() -> bool:
+        return d.model.device != "cpu"
+
     def serialize(row: dict) -> dict:
         out = {
             "name": row["name"],
@@ -110,6 +117,56 @@ def create_app(deps: Deps) -> FastAPI:
             "capability": info.capability if info else None,
             "batchSize": d.batch_size,
             "ram": None,
+        }
+
+    # ---- settings --------------------------------------------------------
+    @app.get("/settings")
+    def settings():
+        """Read-only snapshot of what the app is running on (spec §settings).
+
+        v1 is display-only: the active model, the runtime it loaded on, and rolled-up
+        index/label/storage stats. Model switching is future work — `model.switchable`
+        stays False and `availableModels` lists just the one that's loaded, so the UI
+        can render the picker disabled without a contract change later.
+        """
+        info = d.gpu_info
+        snap = d.store.snapshot()
+        sources = d.registry.list()
+        classes = d.labels.classes_with_counts()
+        checkpoint = d.config.checkpoint
+        return {
+            "model": {
+                "checkpoint": checkpoint,
+                "device": d.model.device,
+                "dims": d.model.dims,
+                "fingerprint": d.model.fingerprint,
+                "spec": d.model.spec,  # image size + preprocessing lib versions, or null
+                "switchable": False,
+            },
+            "availableModels": [
+                {"checkpoint": checkpoint, "active": True},
+            ],
+            "runtime": {
+                "device": d.model.device,
+                "gpuName": info.name if info else None,
+                "vram": info.vram_total if info else None,
+                "capability": info.capability if info else None,
+                "batchSize": d.batch_size,
+                "sidecarVersion": os.environ.get("SATSEARCH_SIDECAR_VERSION", "dev"),
+            },
+            "index": {
+                "sources": len(sources),
+                "tiles": len(snap.ordinal_meta),
+                "geolocated": sum(1 for s in sources if s.hasGeo),
+                "snapshotId": snap.snapshot_id,
+            },
+            "labels": {
+                "classes": len(classes),
+                "tagged": sum(c["count"] for c in classes),
+            },
+            "storage": {
+                "dataDir": d.config.data_dir,
+            },
         }
 
     # ---- search ----------------------------------------------------------
@@ -168,6 +225,18 @@ def create_app(deps: Deps) -> FastAPI:
     @app.get("/sources")
     def list_sources():
         return [s.model_dump() for s in d.registry.list()]
+
+    @app.post("/sources/scan")
+    def scan_source(payload: dict):
+        """Preview a folder before importing: embeddable image count, sampled size,
+        structure breakdown, and a time estimate. No source created, no job started."""
+        kind = payload.get("kind")
+        path = payload.get("path")
+        if kind not in ("xyz", "plain", "satimg") or not path or not os.path.isdir(path):
+            raise HTTPException(400, "kind must be xyz|plain|satimg and path a directory")
+        return preview_mod.scan(
+            kind, path, throughput_path=d.config.throughput_json,
+            device=_device_key(), has_gpu=_has_gpu())
 
     @app.get("/sources/{source_id}/tiles")
     def browse_source_tiles(source_id: str, offset: int = 0, limit: int = 100,
@@ -232,7 +301,8 @@ def create_app(deps: Deps) -> FastAPI:
                         source.minZoom, source.maxZoom = min(zs), max(zs)
                         source.embedZoom = source.embedZoom or max(zs)
                 run_ingest(source, d.model, d.store, d.jobs, emb_dir, job_id,
-                           batch_size=d.batch_size, on_downgrade=d.note_downgrade)
+                           batch_size=d.batch_size, on_downgrade=d.note_downgrade,
+                           throughput_path=d.config.throughput_json, device=_device_key())
                 job = d.jobs.get(job_id)
                 d.registry.patch(sid, tileCount=job.done if job else 0)
             except Exception as e:  # pragma: no cover
@@ -279,7 +349,8 @@ def create_app(deps: Deps) -> FastAPI:
                 import shutil
                 shutil.rmtree(new_dir, ignore_errors=True)
                 run_ingest(src, d.model, d.store, d.jobs, new_dir, job_id, kind="reembed",
-                           batch_size=d.batch_size, on_downgrade=d.note_downgrade)
+                           batch_size=d.batch_size, on_downgrade=d.note_downgrade,
+                           throughput_path=d.config.throughput_json, device=_device_key())
                 shutil.rmtree(emb_dir, ignore_errors=True)
                 os.replace(new_dir, emb_dir)
                 d.registry.patch(source_id, fingerprint=d.model.fingerprint,

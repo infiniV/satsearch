@@ -76,6 +76,47 @@ def test_run_ingest_plain_end_to_end(tmp_path):
     assert res["total"] == 5
 
 
+def test_run_ingest_records_throughput(tmp_path):
+    from satsearch_sidecar import preview
+    root = tmp_path / "imgs"
+    root.mkdir()
+    for i in range(5):
+        Image.new("RGB", (4, 4)).save(root / f"{i}.jpg")
+    model = Model(FakeBackend(), "fp")
+    store = Store(calibrate=model.calibrate)
+    jobs = Jobs()
+    emb_dir = tmp_path / "emb"
+    thr = tmp_path / "throughput.json"
+    src = Source(id="s", label="s", kind="plain", rootPath=str(root),
+                 projection="none", fingerprint="fp")
+    ingest.run_ingest(src, model, store, jobs, str(emb_dir), job_id="j1", batch_size=2,
+                      throughput_path=str(thr), device="cpu")
+    data = preview._read_throughput(str(thr))
+    assert "cpu" in data and data["cpu"] > 0
+
+
+def test_run_ingest_resume_skips_throughput(tmp_path):
+    from satsearch_sidecar import preview
+    root = tmp_path / "imgs"
+    root.mkdir()
+    for i in range(4):
+        Image.new("RGB", (4, 4)).save(root / f"{i}.jpg")
+    model = Model(FakeBackend(), "fp")
+    store = Store(calibrate=model.calibrate)
+    jobs = Jobs()
+    emb_dir = tmp_path / "emb"
+    thr = tmp_path / "throughput.json"
+    src = Source(id="s", label="s", kind="plain", rootPath=str(root),
+                 projection="none", fingerprint="fp")
+    ingest.run_ingest(src, model, store, jobs, str(emb_dir), job_id="j1", batch_size=2,
+                      throughput_path=str(thr), device="cpu")
+    os.remove(str(thr))
+    # a resume that embeds nothing must not write a bogus throughput
+    ingest.run_ingest(src, model, store, jobs, str(emb_dir), job_id="j2", batch_size=2,
+                      throughput_path=str(thr), device="cpu")
+    assert not os.path.exists(str(thr))
+
+
 def test_run_ingest_resumes(tmp_path):
     root = tmp_path / "imgs"
     root.mkdir()

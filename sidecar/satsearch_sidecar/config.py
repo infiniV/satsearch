@@ -28,6 +28,11 @@ class Config:
     def sources_json(self) -> str:
         return os.path.join(self.data_dir, "sources.json")
 
+    @property
+    def throughput_json(self) -> str:
+        """Learned embedding throughput (tiles/s) per device — feeds import time estimates."""
+        return os.path.join(self.data_dir, "throughput.json")
+
     def embeddings_dir(self, source_id: str) -> str:
         return os.path.join(self.data_dir, "embeddings", source_id)
 

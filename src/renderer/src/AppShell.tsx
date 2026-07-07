@@ -14,6 +14,7 @@ import { SearchView } from './views/SearchView'
 import { GalleryView } from './views/GalleryView'
 import { LabelsView } from './views/LabelsView'
 import { SourcesView } from './views/SourcesView'
+import { SettingsView } from './views/SettingsView'
 
 export function AppShell(): React.JSX.Element {
   const { health, error, boot, logs, readyTick, retry } = useHealth()
@@ -143,6 +144,7 @@ export function AppShell(): React.JSX.Element {
           {route === 'sources' && (
             <SourcesView sources={sources} onChanged={refreshSources} onBrowse={browseSource} />
           )}
+          {route === 'settings' && <SettingsView readyTick={readyTick} />}
         </main>
 
         <StatsBar

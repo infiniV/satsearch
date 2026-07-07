@@ -1,17 +1,18 @@
-import { LayoutDashboard, Search, Images, Tag, Layers } from 'lucide-react'
+import { LayoutDashboard, Search, Images, Tag, Layers, Settings as SettingsIcon } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { HealthStatus } from '@shared/types'
 import { Mark } from './Mark'
 import { cn } from '@/lib/utils'
 
-export type Route = 'dashboard' | 'search' | 'gallery' | 'labels' | 'sources'
+export type Route = 'dashboard' | 'search' | 'gallery' | 'labels' | 'sources' | 'settings'
 
 const NAV: { route: Route; label: string; icon: LucideIcon }[] = [
   { route: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { route: 'search', label: 'Search', icon: Search },
   { route: 'gallery', label: 'Gallery', icon: Images },
   { route: 'labels', label: 'Labels', icon: Tag },
-  { route: 'sources', label: 'Sources', icon: Layers }
+  { route: 'sources', label: 'Sources', icon: Layers },
+  { route: 'settings', label: 'Settings', icon: SettingsIcon }
 ]
 
 export function Rail({

@@ -46,6 +46,24 @@ describe('SidecarClient', () => {
     expect(r.total).toBe(1)
   })
 
+  it('posts scanSource as JSON and returns the preview', async () => {
+    let body = ''
+    let ctype = ''
+    const port = await serve((req, res) => {
+      ctype = req.headers['content-type'] ?? ''
+      req.on('data', (c) => (body += c))
+      req.on('end', () => {
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({ kind: 'plain', imageCount: 42, totalBytes: 100, approxBytes: false, estSeconds: 5, estBasis: 'heuristic' }))
+      })
+    })
+    const c = new SidecarClient(port, 't')
+    const r = await c.scanSource('plain', '/some/dir')
+    expect(ctype).toMatch(/application\/json/)
+    expect(JSON.parse(body)).toEqual({ kind: 'plain', path: '/some/dir' })
+    expect(r.imageCount).toBe(42)
+  })
+
   it('throws on a non-ok response', async () => {
     const port = await serve((_req, res) => {
       res.statusCode = 400

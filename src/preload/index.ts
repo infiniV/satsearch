@@ -2,8 +2,10 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type {
   BrowseResponse,
   HealthStatus,
+  ImportPreview,
   Job,
   SearchResponse,
+  SettingsInfo,
   Source,
   SearchParams,
   SidecarProgress,
@@ -15,6 +17,7 @@ type JobsSnapshot = { jobs: Job[]; mutations: unknown[] }
 
 const api = {
   health: (): Promise<HealthStatus> => ipcRenderer.invoke('health'),
+  settings: (): Promise<SettingsInfo> => ipcRenderer.invoke('settings'),
   search: (p: SearchParams): Promise<SearchResponse> => ipcRenderer.invoke('search', p),
   listSources: (): Promise<Source[]> => ipcRenderer.invoke('sources:list'),
   browseTiles: (
@@ -26,8 +29,20 @@ const api = {
   tileMeta: (thumbUrl: string): Promise<TileMeta> => ipcRenderer.invoke('tiles:meta', thumbUrl),
   revealTile: (thumbUrl: string): Promise<void> => ipcRenderer.invoke('tiles:reveal', thumbUrl),
   openTile: (thumbUrl: string): Promise<string> => ipcRenderer.invoke('tiles:open', thumbUrl),
-  pickAndAddSource: (): Promise<{ jobId: string; sourceId: string; kind: string; path: string } | null> =>
-    ipcRenderer.invoke('sources:pickAndAdd'),
+  /** Open the OS folder picker; returns a token for scan/confirm, or null if cancelled. */
+  pickSource: (
+    mode: 'folder' | 'satimg'
+  ): Promise<{ token: string; kind: 'xyz' | 'plain' | 'satimg'; folderName: string } | null> =>
+    ipcRenderer.invoke('sources:pick', mode),
+  /** Enumerate the picked folder into an import preview. */
+  scanSource: (token: string): Promise<ImportPreview> => ipcRenderer.invoke('sources:scan', token),
+  /** Commit the pending pick — starts embedding. */
+  confirmAddSource: (
+    token: string
+  ): Promise<{ jobId: string; sourceId: string; kind: string; path: string }> =>
+    ipcRenderer.invoke('sources:confirmAdd', token),
+  /** Drop a pending pick without importing (modal cancelled). */
+  cancelPick: (token: string): Promise<void> => ipcRenderer.invoke('sources:cancelPick', token),
   deleteSource: (id: string): Promise<{ deleted: boolean }> => ipcRenderer.invoke('sources:delete', id),
   relinkSource: (id: string): Promise<{ ok: boolean } | null> => ipcRenderer.invoke('sources:relink', id),
   reconcileSource: (
@@ -35,8 +50,6 @@ const api = {
   ): Promise<{ counts: { added: number; removed: number; changed: number } }> =>
     ipcRenderer.invoke('sources:reconcile', id),
   reembedSource: (id: string): Promise<{ jobId: string }> => ipcRenderer.invoke('sources:reembed', id),
-  importSatimg: (checkpoint: string): Promise<{ jobId: string; sourceId: string } | null> =>
-    ipcRenderer.invoke('sources:importSatimg', checkpoint),
   listJobs: (): Promise<Job[]> => ipcRenderer.invoke('jobs:list'),
   cancelJob: (id: string): Promise<void> => ipcRenderer.invoke('jobs:cancel', id),
 
