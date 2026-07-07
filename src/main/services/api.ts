@@ -46,6 +46,16 @@ export class SidecarClient {
     return this.json(await this.fetchImpl(`${this.base()}/settings`, { headers: this.auth() }))
   }
 
+  async setSearchK(k: number): Promise<{ k: number }> {
+    return this.json(
+      await this.fetchImpl(`${this.base()}/settings`, {
+        method: 'POST',
+        headers: { ...this.auth(), 'content-type': 'application/json' },
+        body: JSON.stringify({ searchK: k })
+      })
+    )
+  }
+
   async search(params: {
     query?: string
     imageBytes?: ArrayBuffer

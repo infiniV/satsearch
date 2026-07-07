@@ -70,6 +70,7 @@ export interface SearchResponse {
   snapshotId: string
   from: number
   belowWindow: boolean
+  k: number
   results: Result[]
 }
 
@@ -195,6 +196,7 @@ export interface SettingsInfo {
   index: { sources: number; tiles: number; geolocated: number; snapshotId: string }
   labels: { classes: number; tagged: number }
   storage: { dataDir: string }
+  search: { k: number; kMin: number; kMax: number }
 }
 
 export interface SearchParams {

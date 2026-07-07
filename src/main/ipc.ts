@@ -56,6 +56,7 @@ export function registerIpc(getReady: () => Promise<IpcDeps>): void {
   on('health', ({ client }) => client.health())
 
   on('settings', ({ client }) => client.settings())
+  on('settings:setSearchK', ({ client }, k: number) => client.setSearchK(k))
 
   on('search', ({ client }, params: Parameters<SidecarClient['search']>[0]) =>
     client.search(params)

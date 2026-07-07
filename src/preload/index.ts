@@ -18,6 +18,8 @@ type JobsSnapshot = { jobs: Job[]; mutations: unknown[] }
 const api = {
   health: (): Promise<HealthStatus> => ipcRenderer.invoke('health'),
   settings: (): Promise<SettingsInfo> => ipcRenderer.invoke('settings'),
+  setSearchK: (k: number): Promise<{ k: number }> =>
+    ipcRenderer.invoke('settings:setSearchK', k),
   search: (p: SearchParams): Promise<SearchResponse> => ipcRenderer.invoke('search', p),
   listSources: (): Promise<Source[]> => ipcRenderer.invoke('sources:list'),
   browseTiles: (

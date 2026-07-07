@@ -72,4 +72,22 @@ describe('SidecarClient', () => {
     const c = new SidecarClient(port, 't')
     await expect(c.search({ query: 'x' })).rejects.toThrow(/400/)
   })
+
+  it('posts setSearchK as JSON and returns the clamped k', async () => {
+    let body = ''
+    let method = ''
+    const port = await serve((req, res) => {
+      method = req.method ?? ''
+      req.on('data', (c) => (body += c))
+      req.on('end', () => {
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({ k: 20000 }))
+      })
+    })
+    const c = new SidecarClient(port, 't')
+    const r = await c.setSearchK(20000)
+    expect(method).toBe('POST')
+    expect(JSON.parse(body)).toEqual({ searchK: 20000 })
+    expect(r.k).toBe(20000)
+  })
 })
