@@ -51,6 +51,31 @@ export interface SearchResponse {
   results: Result[]
 }
 
+/** A corpus tile without a relevance score — the browse/gallery counterpart to Result. */
+export type GalleryTile = Omit<Result, 'score'>
+
+export interface BrowseResponse {
+  total: number
+  offset: number
+  limit: number
+  tiles: GalleryTile[]
+}
+
+export type TileSort = 'name' | 'name-desc'
+
+/** On-disk metadata for a single tile, resolved in the main process. */
+export interface TileMeta {
+  path: string
+  bytes: number
+  mtime: number
+  width?: number
+  height?: number
+  format?: string
+}
+
+/** A tile shown in the detail slide-over — a search Result or a browsed GalleryTile. */
+export type DetailTile = GalleryTile & { score?: number }
+
 export type JobKind = 'ingest' | 'import' | 'reembed'
 export type JobState = 'running' | 'done' | 'error' | 'cancelled'
 
@@ -76,10 +101,14 @@ export interface SourceMutationEvent {
   snapshotId: string
 }
 
-/** Live boot progress parsed from the sidecar's stderr during model load.
- * `pct` is null while the phase has no measurable progress (spawn / warming). */
+/** Live boot progress shown on the HealthGate. Covers both the one-time first-run
+ * environment provisioning (uv: `provisioning` → `syncing` → `building`) and the
+ * per-launch sidecar boot parsed from its stderr (`starting` → `downloading` →
+ * `loading` → `warming`). `pct` is null while a phase has no measurable progress
+ * (uv over a pipe emits discrete step events, not a byte %, so `syncing` is
+ * indeterminate; the model download/load phases do report a real percentage). */
 export interface SidecarProgress {
-  phase: 'starting' | 'downloading' | 'loading' | 'warming'
+  phase: 'provisioning' | 'syncing' | 'building' | 'starting' | 'downloading' | 'loading' | 'warming'
   label: string
   pct: number | null
 }

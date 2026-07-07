@@ -1,0 +1,66 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            script: build:linux
+            artifact: 'dist/*.AppImage'
+          - os: windows-latest
+            script: build:win
+            artifact: 'dist/*.exe'
+    runs-on: ${{ matrix.os }}
+    env:
+      # Unsigned builds — no Apple/Windows certs in this repo.
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Builds the renderer/main bundle, downloads the per-OS `uv` binary into
+      # resources/bin (scripts/fetch-uv.mjs), then packages the installer. No
+      # Python venv is baked in — the app provisions it on first run via uv.
+      - name: Build installer
+        run: pnpm ${{ matrix.script }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.os }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+
+      - name: Attach installers to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installers/*
+          generate_release_notes: true

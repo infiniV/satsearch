@@ -14,9 +14,10 @@
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
-    "build:unpack": "npm run build && electron-builder --dir",
-    "build:linux": "electron-vite build && electron-builder --linux",
-    "build:win": "electron-vite build && electron-builder --win",
+    "fetch:uv": "node scripts/fetch-uv.mjs",
+    "build:unpack": "npm run build && npm run fetch:uv && electron-builder --dir",
+    "build:linux": "electron-vite build && npm run fetch:uv && electron-builder --linux",
+    "build:win": "electron-vite build && npm run fetch:uv && electron-builder --win",
     "test": "vitest run"
   },
   "dependencies": {

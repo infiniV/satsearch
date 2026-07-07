@@ -154,6 +154,33 @@ def create_app(deps: Deps) -> FastAPI:
     def list_sources():
         return [s.model_dump() for s in d.registry.list()]
 
+    @app.get("/sources/{source_id}/tiles")
+    def browse_source_tiles(source_id: str, offset: int = 0, limit: int = 100,
+                            sort: str = "name"):
+        """Paged browse of a source's whole embedded corpus (spec §gallery).
+
+        Mirrors `serialize()` minus `score`; adds lat/lon via geo when the source
+        is geolocated. Total is the source's embedded tile count.
+        """
+        src = d.registry.get(source_id)
+        if src is None:
+            raise HTTPException(404, "no such source")
+        if sort not in ("name", "name-desc"):
+            raise HTTPException(400, "sort must be name|name-desc")
+        rows = d.store.tiles_for(source_id)
+        rows.sort(key=lambda nr: nr[0], reverse=sort.endswith("-desc"))
+        total = len(rows)
+        page = rows[offset: offset + limit] if limit and limit > 0 else rows[offset:]
+        tiles = []
+        for name, rel in page:
+            out = {"name": name, "sourceId": source_id, "thumbUrl": _thumb_url(source_id, rel)}
+            ll = geo.latlon_for(src, name)
+            if ll:
+                lat, lon, x, y, z = ll
+                out.update(lat=lat, lon=lon, x=x, y=y, z=z)
+            tiles.append(out)
+        return {"total": total, "offset": offset, "limit": limit, "tiles": tiles}
+
     @app.post("/sources")
     def add_source(payload: dict):
         kind = payload.get("kind")

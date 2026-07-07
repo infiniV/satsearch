@@ -1,10 +1,12 @@
 // IPC bridge: renderer -> main -> sidecar (spec §2). All calls go through the
 // token-authed SidecarClient; the renderer never talks to the sidecar directly.
-import { ipcMain, dialog, BrowserWindow } from 'electron'
+import { ipcMain, dialog, shell, BrowserWindow } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { SidecarClient } from './services/api'
 import type { SourcesCache } from './services/sources'
+import { resolveThumbAbs } from './protocol'
+import type { TileMeta, TileSort } from '@shared/types'
 
 /** Sniff whether a folder looks like an XYZ pyramid ({z}/{x}/{y}.img) or plain. */
 export function detectKind(dir: string): 'xyz' | 'plain' {
@@ -37,13 +39,14 @@ export interface IpcDeps {
  * load its model — registering up front (rather than after `ensureReady`) means those
  * early calls await readiness instead of hitting a missing handler and logging noise.
  */
-export function registerIpc(ready: Promise<IpcDeps>): void {
+export function registerIpc(getReady: () => Promise<IpcDeps>): void {
   // Resolve deps per-invocation so calls that land during model load simply wait.
+  // getReady() returns the current gate so a retried first-run attempt is picked up.
   const on = <A extends unknown[], R>(
     channel: string,
     fn: (deps: IpcDeps, ...args: A) => R | Promise<R>
   ): void => {
-    ipcMain.handle(channel, async (_e, ...args) => fn(await ready, ...(args as A)))
+    ipcMain.handle(channel, async (_e, ...args) => fn(await getReady(), ...(args as A)))
   }
 
   on('health', ({ client }) => client.health())
@@ -53,6 +56,37 @@ export function registerIpc(ready: Promise<IpcDeps>): void {
   )
 
   on('sources:list', ({ client }) => client.listSources())
+
+  on('browse:tiles', ({ client }, sourceId: string, offset: number, limit: number, sort: TileSort) =>
+    client.browseTiles(sourceId, offset, limit, sort)
+  )
+
+  // Tile file ops resolve the `app://thumb` url to a guarded absolute path via the
+  // same SourcesCache + pathGuard the protocol handler uses — the renderer never
+  // sees a filesystem path except the one meta returns for display/copy.
+  on('tiles:meta', async ({ sources }, thumbUrl: string): Promise<TileMeta> => {
+    const abs = resolveThumbAbs(thumbUrl, sources)
+    const stat = await fs.promises.stat(abs)
+    const meta: TileMeta = { path: abs, bytes: stat.size, mtime: stat.mtimeMs }
+    try {
+      const sharp = (await import('sharp')).default
+      const m = await sharp(abs).metadata()
+      meta.width = m.width
+      meta.height = m.height
+      meta.format = m.format
+    } catch {
+      /* non-image or unreadable — path/bytes/mtime still returned */
+    }
+    return meta
+  })
+
+  on('tiles:reveal', ({ sources }, thumbUrl: string) => {
+    shell.showItemInFolder(resolveThumbAbs(thumbUrl, sources))
+  })
+
+  on('tiles:open', ({ sources }, thumbUrl: string) =>
+    shell.openPath(resolveThumbAbs(thumbUrl, sources))
+  )
 
   on('sources:pickAndAdd', async ({ client, sources }) => {
     const win = BrowserWindow.getFocusedWindow() ?? undefined

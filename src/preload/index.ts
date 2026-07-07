@@ -1,11 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  BrowseResponse,
   HealthStatus,
   Job,
   SearchResponse,
   Source,
   SearchParams,
-  SidecarProgress
+  SidecarProgress,
+  TileMeta,
+  TileSort
 } from '@shared/types'
 
 type JobsSnapshot = { jobs: Job[]; mutations: unknown[] }
@@ -14,6 +17,15 @@ const api = {
   health: (): Promise<HealthStatus> => ipcRenderer.invoke('health'),
   search: (p: SearchParams): Promise<SearchResponse> => ipcRenderer.invoke('search', p),
   listSources: (): Promise<Source[]> => ipcRenderer.invoke('sources:list'),
+  browseTiles: (
+    sourceId: string,
+    offset = 0,
+    limit = 100,
+    sort: TileSort = 'name'
+  ): Promise<BrowseResponse> => ipcRenderer.invoke('browse:tiles', sourceId, offset, limit, sort),
+  tileMeta: (thumbUrl: string): Promise<TileMeta> => ipcRenderer.invoke('tiles:meta', thumbUrl),
+  revealTile: (thumbUrl: string): Promise<void> => ipcRenderer.invoke('tiles:reveal', thumbUrl),
+  openTile: (thumbUrl: string): Promise<string> => ipcRenderer.invoke('tiles:open', thumbUrl),
   pickAndAddSource: (): Promise<{ jobId: string; sourceId: string; kind: string; path: string } | null> =>
     ipcRenderer.invoke('sources:pickAndAdd'),
   deleteSource: (id: string): Promise<{ deleted: boolean }> => ipcRenderer.invoke('sources:delete', id),
@@ -62,7 +74,9 @@ const api = {
     const h = (_e: unknown, p: SidecarProgress): void => cb(p)
     ipcRenderer.on('sidecar:progress', h)
     return () => ipcRenderer.removeListener('sidecar:progress', h)
-  }
+  },
+  /** Re-attempt sidecar startup after a failed first run (e.g. offline provisioning). */
+  retryBoot: (): Promise<void> => ipcRenderer.invoke('sidecar:retry')
 }
 
 contextBridge.exposeInMainWorld('api', api)

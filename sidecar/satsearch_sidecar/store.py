@@ -108,6 +108,15 @@ class Store:
         g = snap.name_to_ordinal.get((source_id, name))
         return snap.ordinal_meta[g][2] if g is not None else None
 
+    def tiles_for(self, source_id: str) -> list[tuple[str, str]]:
+        """(name, rel_path) for every embedded tile of `source_id`, in ordinal order.
+
+        Backs the gallery browse endpoint — the whole corpus of a source, not just
+        search hits. Reads the current immutable snapshot without locking.
+        """
+        snap = self._snap
+        return [(name, rel) for (sid, name, rel) in snap.ordinal_meta if sid == source_id]
+
     def vector_for(self, source_id: str, name: str) -> np.ndarray | None:
         snap = self._snap
         g = snap.name_to_ordinal.get((source_id, name))

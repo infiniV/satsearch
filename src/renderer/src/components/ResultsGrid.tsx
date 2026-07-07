@@ -1,13 +1,11 @@
-import { useState } from 'react'
-import { Sparkles, Tag, ImageOff } from 'lucide-react'
-import { Card } from './ui/card'
-import { Button } from './ui/button'
-import { Badge } from './ui/badge'
-import type { Result } from '@shared/types'
+import { TileCard } from './TileCard'
+import type { DetailTile, Result } from '@shared/types'
 
 export function ResultsGrid({
   results,
   belowWindow,
+  hasRun,
+  onOpen,
   onFindSimilar,
   activeClass,
   labelState,
@@ -15,10 +13,12 @@ export function ResultsGrid({
 }: {
   results: Result[]
   belowWindow: boolean
-  onFindSimilar: (r: Result) => void
+  hasRun: boolean
+  onOpen: (t: DetailTile) => void
+  onFindSimilar: (r: DetailTile) => void
   activeClass?: string | null
   labelState?: Record<string, string>
-  onLabel?: (r: Result) => void
+  onLabel?: (r: DetailTile) => void
 }) {
   if (belowWindow) {
     return (
@@ -29,119 +29,38 @@ export function ResultsGrid({
     )
   }
   if (results.length === 0) {
-    return (
+    return hasRun ? (
       <EmptyCanvas
-        title="SatSearch"
-        subtitle="Semantic search over your satellite tiles. Add a source, then describe what you're looking for."
+        title="No matches"
+        subtitle="Nothing scored inside the current filters. Widen the score range, clear source filters, or try another description."
+      />
+    ) : (
+      <EmptyCanvas
+        title="Describe what you're looking for"
+        subtitle="Semantic search runs over every embedded tile. Try “brick kiln”, “circular water tank”, or drop an image to search by similarity."
       />
     )
   }
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(164px,1fr))] gap-3">
-      {results.map((r, i) => {
-        const label = labelState?.[`${r.sourceId} ${r.name}`]
-        return (
-          <ResultTile
-            key={`${r.sourceId}/${r.name}`}
-            r={r}
-            index={i}
-            label={label}
-            activeClass={activeClass}
-            onLabel={onLabel}
-            onFindSimilar={onFindSimilar}
-          />
-        )
-      })}
+      {results.map((r, i) => (
+        <TileCard
+          key={`${r.sourceId}/${r.name}`}
+          tile={r}
+          index={i}
+          showScore
+          label={labelState?.[`${r.sourceId} ${r.name}`]}
+          activeClass={activeClass}
+          onOpen={onOpen}
+          onLabel={onLabel}
+          onFindSimilar={onFindSimilar}
+        />
+      ))}
     </div>
   )
 }
 
-function ResultTile({
-  r,
-  index,
-  label,
-  activeClass,
-  onLabel,
-  onFindSimilar
-}: {
-  r: Result
-  index: number
-  label?: string
-  activeClass?: string | null
-  onLabel?: (r: Result) => void
-  onFindSimilar: (r: Result) => void
-}) {
-  const [failed, setFailed] = useState(false)
-  const base = r.name.split('/').pop() ?? r.name
-  return (
-    <Card
-      className="group relative overflow-hidden border-border transition-colors hover:border-border-strong animate-rise"
-      style={{ animationDelay: `${Math.min(index, 24) * 18}ms` }}
-    >
-      <div className="relative aspect-square w-full bg-muted">
-        {failed ? (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-2 px-2 text-center text-muted-foreground/70">
-            <ImageOff className="h-5 w-5" />
-            <span className="line-clamp-2 break-all text-[0.6875rem] leading-tight">{base}</span>
-          </div>
-        ) : (
-          <img
-            src={r.thumbUrl}
-            alt={base}
-            loading="lazy"
-            onError={() => setFailed(true)}
-            className="h-full w-full object-cover"
-          />
-        )}
-
-        {label && (
-          <Badge variant="solid" className="absolute left-2 top-2 shadow-sm">
-            <Tag className="h-3 w-3" />
-            {label}
-          </Badge>
-        )}
-
-        {/* filename, revealed on hover over a gradient scrim */}
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-2 pt-6 opacity-0 transition-opacity group-hover:opacity-100">
-          <p className="truncate text-[0.6875rem] font-medium text-white/90" title={r.name}>
-            {base}
-          </p>
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between gap-2 px-2.5 py-2">
-        <ScoreReadout score={r.score} />
-        <div className="flex items-center opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-          {activeClass && onLabel && (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              onClick={() => onLabel(r)}
-              title={`Tag as “${activeClass}”`}
-            >
-              <Tag />
-            </Button>
-          )}
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            onClick={() => onFindSimilar(r)}
-            title="Find similar tiles"
-          >
-            <Sparkles />
-          </Button>
-        </div>
-      </div>
-    </Card>
-  )
-}
-
-function ScoreReadout({ score }: { score: number }) {
-  const pct = Math.round(score * 1000) / 10
-  return <span className="tnum text-xs text-muted-foreground">{pct.toFixed(1)}%</span>
-}
-
-function EmptyCanvas({ title, subtitle }: { title: string; subtitle: string }) {
+export function EmptyCanvas({ title, subtitle }: { title: string; subtitle: string }) {
   return (
     <div className="canvas flex h-full items-center justify-center rounded-lg border border-border">
       <div className="max-w-sm space-y-2 px-6">

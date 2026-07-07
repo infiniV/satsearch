@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, type RefObject } from 'react'
 import { Search, ImageIcon, X, Sparkles } from 'lucide-react'
 import { Input } from './ui/input'
 import { Button } from './ui/button'
@@ -7,12 +7,14 @@ export function SearchBar({
   onSearch,
   refTile,
   onClearRef,
-  busy
+  busy,
+  inputRef
 }: {
   onSearch: (opts: { query?: string; imageBytes?: ArrayBuffer }) => void
   refTile: { sourceId: string; name: string } | null
   onClearRef: () => void
   busy: boolean
+  inputRef?: RefObject<HTMLInputElement | null>
 }) {
   const [text, setText] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
@@ -43,6 +45,7 @@ export function SearchBar({
       <Search className="ml-1 h-4 w-4 shrink-0 text-muted-foreground" />
 
       <Input
+        ref={inputRef}
         placeholder="Describe a tile — “brick kiln”, “circular water tank”, “solar farm”…"
         value={text}
         onChange={(e) => setText(e.target.value)}

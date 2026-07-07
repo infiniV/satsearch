@@ -97,6 +97,37 @@ def test_xyz_source_geo_and_basemap(tmp_path):
     assert res["file"] is not None and res["file"].endswith("12/0/0.jpg")
 
 
+def test_browse_source_tiles(tmp_path):
+    client, _ = make_client(tmp_path)
+    imgs = tmp_path / "imgs"
+    imgs.mkdir()
+    for i in range(5):
+        Image.new("RGB", (4, 4)).save(imgs / f"{i}.jpg")
+    r = client.post("/sources", json={"kind": "plain", "path": str(imgs)}, headers=_auth())
+    sid = r.json()["sourceId"]
+    job_id = r.json()["jobId"]
+    for _ in range(100):
+        if client.get(f"/jobs/{job_id}", headers=_auth()).json()["state"] == "done":
+            break
+        time.sleep(0.02)
+    # full browse: total == corpus size, thumbUrls present, sorted by name asc
+    body = client.get(f"/sources/{sid}/tiles", headers=_auth()).json()
+    assert body["total"] == 5
+    names = [t["name"] for t in body["tiles"]]
+    assert names == sorted(names)
+    assert body["tiles"][0]["thumbUrl"].startswith("app://thumb/")
+    # paging: offset+limit windows the same ordering
+    page = client.get(f"/sources/{sid}/tiles?offset=2&limit=2", headers=_auth()).json()
+    assert page["total"] == 5 and len(page["tiles"]) == 2
+    assert [t["name"] for t in page["tiles"]] == names[2:4]
+    # descending sort reverses
+    desc = client.get(f"/sources/{sid}/tiles?sort=name-desc", headers=_auth()).json()
+    assert [t["name"] for t in desc["tiles"]] == names[::-1]
+    # unknown source is 404; bad sort is 400
+    assert client.get("/sources/nope/tiles", headers=_auth()).status_code == 404
+    assert client.get(f"/sources/{sid}/tiles?sort=score", headers=_auth()).status_code == 400
+
+
 def test_labels_flow(tmp_path):
     client, _ = make_client(tmp_path)
     # add a class, label a tile, read state, list, export
@@ -224,7 +255,7 @@ def test_import_satimg_images_only_embeds_fresh(tmp_path):
     srcs = client.get("/sources", headers=_auth()).json()
     imported = [s for s in srcs if s["kind"] == "satimg-import"]
     assert len(imported) == 1
-    assert imported[0]["projection"] == "geodetic"
+    assert imported[0]["projection"] == "web-mercator"
     assert imported[0]["attested"] is False
     assert imported[0]["tileCount"] == 6
     # geolocated + searchable

@@ -49,17 +49,30 @@ export function registerAppScheme(): void {
   ])
 }
 
-async function serveThumb(url: URL, sources: SourcesCache): Promise<Response> {
+/**
+ * Resolve an `app://thumb/<sourceId>/<encodedRel>` URL to a guarded absolute path,
+ * or throw. Shared by the protocol handler and the tile-meta / reveal / open IPC so
+ * they all apply the same path-traversal guard against the same source roots.
+ */
+export function resolveThumbAbs(thumbUrl: string, sources: SourcesCache): string {
+  const url = new URL(thumbUrl)
+  if (url.host !== 'thumb') throw new Error('not a thumb url')
   const parts = url.pathname.replace(/^\//, '').split('/')
   const sourceId = decodeURIComponent(parts[0] ?? '')
   const relEncoded = parts.slice(1).join('/')
   const root = sources.rootPath(sourceId)
-  if (!root) {
+  if (!root) throw new Error(`unknown source: ${sourceId}`)
+  return safeResolve(root, relEncoded)
+}
+
+async function serveThumb(url: URL, sources: SourcesCache): Promise<Response> {
+  const sourceId = decodeURIComponent(url.pathname.replace(/^\//, '').split('/')[0] ?? '')
+  if (!sources.rootPath(sourceId)) {
     console.warn('[thumb] 404 unknown source:', sourceId, '— known:', sources.ids())
     return new Response('unknown source', { status: 404 })
   }
   try {
-    const abs = safeResolve(root, relEncoded)
+    const abs = resolveThumbAbs(url.href, sources)
     if (!fs.existsSync(abs)) {
       console.warn('[thumb] 404 missing file:', abs)
       return new Response('missing', { status: 404 })
@@ -68,7 +81,7 @@ async function serveThumb(url: URL, sources: SourcesCache): Promise<Response> {
     const type = MIME[path.extname(abs).toLowerCase()] ?? 'application/octet-stream'
     return new Response(new Uint8Array(data), { headers: { 'content-type': type } })
   } catch (e) {
-    console.warn('[thumb] 403 forbidden:', root, relEncoded, String(e))
+    console.warn('[thumb] 403 forbidden:', url.href, String(e))
     return new Response('forbidden', { status: 403 })
   }
 }
@@ -83,17 +96,36 @@ async function serveBasemap(url: URL, client: SidecarClient): Promise<Response> 
   const cached = basemapCache.get(key)
   if (cached) return new Response(new Uint8Array(cached), { headers: { 'content-type': 'image/png' } })
 
-  const { file, crop } = await client.resolveTile(z, x, y)
-  if (!file) {
+  const { file, crop, composite } = await client.resolveTile(z, x, y)
+  const sharp = (await import('sharp')).default
+  let png: Buffer
+
+  if (composite && composite.length > 0) {
+    // under-zoom: downscale-composite native descendant tiles into one 256px tile
+    const layers = await Promise.all(
+      composite.map(async ({ file: f, dst }) => {
+        const [left, top, size] = dst
+        const buf = await sharp(f).resize(size, size).png().toBuffer()
+        return { input: buf, left, top }
+      })
+    )
+    png = await sharp({
+      create: { width: 256, height: 256, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } }
+    })
+      .composite(layers)
+      .png()
+      .toBuffer()
+  } else if (file) {
+    let img = sharp(file)
+    if (crop && crop.length === 3) {
+      const [left, top, size] = crop
+      img = img.extract({ left, top, width: size, height: size }).resize(256, 256)
+    }
+    png = await img.png().toBuffer()
+  } else {
     return new Response(new Uint8Array(TRANSPARENT_PNG), { headers: { 'content-type': 'image/png' } })
   }
-  const sharp = (await import('sharp')).default
-  let img = sharp(file)
-  if (crop && crop.length === 3) {
-    const [left, top, size] = crop
-    img = img.extract({ left, top, width: size, height: size }).resize(256, 256)
-  }
-  const png = await img.png().toBuffer()
+
   if (basemapCache.size > BASEMAP_CACHE_MAX) basemapCache.clear()
   basemapCache.set(key, png)
   return new Response(new Uint8Array(png), { headers: { 'content-type': 'image/png' } })

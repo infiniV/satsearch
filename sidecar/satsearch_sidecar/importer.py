@@ -91,7 +91,7 @@ def import_satimg_city(*, city: str, tile_dir: str, in_emb_dir: str, out_emb_dir
     map_z = z - 1  # satImg z-suffix = map zoom + 1
     source = Source(
         id=sid, label=label or f"satImg: {city}", kind="satimg-import",
-        rootPath=tile_dir, tileCount=len(names), hasGeo=True, projection="geodetic",
+        rootPath=tile_dir, tileCount=len(names), hasGeo=True, projection="web-mercator",
         minZoom=map_z, maxZoom=map_z, embedZoom=map_z,
         tileLayout=GES_LAYOUT,
         fingerprint=attest_fingerprint, attested=True, availability="available",
@@ -128,12 +128,12 @@ def first_map_zoom(tile_dir: str) -> int:
 
 def make_fresh_satimg_source(sid: str, city: str, tile_dir: str, fingerprint: str,
                              label: str | None = None) -> Source:
-    """Geodetic Source shell for a fresh-embedded satImg city (vectors computed here:
+    """Web-mercator Source shell for a fresh-embedded satImg city (vectors computed here:
     attested=False, active fingerprint). tileCount is patched from the job after ingest."""
     map_z = first_map_zoom(tile_dir)
     return Source(
         id=sid, label=label or f"satImg: {city}", kind="satimg-import",
-        rootPath=tile_dir, tileCount=0, hasGeo=True, projection="geodetic",
+        rootPath=tile_dir, tileCount=0, hasGeo=True, projection="web-mercator",
         minZoom=map_z, maxZoom=map_z, embedZoom=map_z, tileLayout=GES_LAYOUT,
         fingerprint=fingerprint, attested=False, availability="available",
         active=True, rev=0,

@@ -59,7 +59,9 @@ def test_import_satimg_city_success(tmp_path):
         city="lahore", tile_dir=tile_dir, in_emb_dir=in_emb, out_emb_dir=out_emb,
         model=model, attest_fingerprint="fp-attest", store=store, sample_n=6)
     assert src.kind == "satimg-import"
-    assert src.projection == "geodetic"
+    # GES/Google Earth Studio tiles are web-mercator (Google Maps tiles), with the
+    # ges quirk being z-suffix = zoom+1 and a TMS y axis — not a geodetic grid.
+    assert src.projection == "web-mercator"
     assert src.tileLayout.zOffset == 1 and src.tileLayout.yScheme == "tms"
     assert src.attested is True
     assert src.tileCount == 6

@@ -5,22 +5,28 @@
 - **NVIDIA GPU** with a working driver (CUDA 12.x capable, ≥6 GB VRAM).
 - **≥16 GB system RAM** recommended for large corpora (the vector corpus lives in CPU RAM).
 - Disk: ~10–12 GB free for the first-run download (CUDA torch wheels + SigLIP2 weights).
-- [`uv`](https://docs.astral.sh/uv/) and `pnpm` for development (the packaged app bundles
-  a pinned `uv` and a CI-pre-built venv, so end users need neither).
+- [`uv`](https://docs.astral.sh/uv/) and `pnpm` for development. End users need **neither**:
+  the packaged app bundles a pinned `uv` and provisions its own environment on first run
+  (see [DISTRIBUTION.md](DISTRIBUTION.md)).
 
 ## First run (what happens)
 
-1. The Electron app takes the single-instance lock and spawns the Python sidecar via
-   `child_process.spawn` (`python -m satsearch_sidecar`), passing a per-launch **token**,
-   a free **port**, and the data dir.
-2. In dev, the sidecar's venv is your `sidecar/.venv` (`uv sync`). On first model use,
-   `transformers` downloads `google/siglip2-so400m-patch16-256` (~3 GB) into the HF cache.
+1. **Packaged app only — provisioning.** On first launch the app runs the bundled `uv sync`
+   into `<dataDir>/runtime` (a writable dir under `userData`): it downloads a managed
+   CPython + the CUDA torch wheels (~2.5 GB) for *this* machine. The HealthGate narrates
+   this as `Provisioning Python → Downloading GPU libraries → Building environment`. It is
+   idempotent — later launches skip straight to the venv and run fully offline. In **dev**
+   this step is skipped; the sidecar uses your `sidecar/.venv` (`uv sync`).
+2. The Electron app spawns the Python sidecar via `child_process.spawn`
+   (`python -m satsearch_sidecar`) using the provisioned interpreter, passing a per-launch
+   **token**, a free **port**, and the data dir. On first model use, `transformers`
+   downloads `google/siglip2-so400m-patch16-256` (~3 GB) into the HF cache.
 3. The **HealthGate** overlay blocks the UI until `GET /health` returns `ready:true`
-   (covers model download + CUDA warm-up). Typed failure states: `driver-missing`,
-   `cuda-missing`, `oom`, `disk-full`, `network`.
+   (covers provisioning + model download + CUDA warm-up), showing live per-phase progress.
 
 > Offline first run fails by design (it needs to download torch + the model). The gate
-> shows the `network` state with the ~5–6 GB disclosure.
+> shows a network-specific message with the ~5–6 GB disclosure and a **Retry** button.
+> Once provisioned, the app runs offline.
 
 ## Using it
 
@@ -40,6 +46,8 @@ All app data lives under Electron's `userData` (override with `SATSEARCH_DATA_DI
 
 ```
 <dataDir>/
+  runtime/                  # packaged: uv-provisioned venv + managed python + cache
+    venv/  python/  uv-cache/  .provisioned   # (.provisioned = uv.lock hash sentinel)
   sidecar.lock              # {pid, port, token, sidecarVersion}
   sources.json  model.json
   embeddings/<sourceId>/    # emb_*.npy + meta_*.parquet shards

@@ -35,9 +35,26 @@ describe('safeResolve', () => {
     expect(() => safeResolve(root, '../secret.txt')).toThrow(/traversal/)
   })
 
-  it('rejects double-encoded traversal (%252e%252e)', () => {
-    // %252e%252e%252f -> decodes to ..%2f -> decodes to ../
-    expect(() => safeResolve(root, '%252e%252e%252fsecret.txt')).toThrow()
+  it('neutralizes double-encoded traversal (%252e%252e) — resolves inside root, never escapes', () => {
+    // Decoding exactly once yields the LITERAL single segment '%2e%2e%2fsecret.txt'
+    // (no real '/' or '..'), so it resolves harmlessly under root — it can never
+    // reach ../secret.txt. Decoding twice (the old bug) would forge '../'.
+    const p = safeResolve(root, '%252e%252e%252fsecret.txt')
+    expect(p.startsWith(fs.realpathSync(root) + path.sep)).toBe(true)
+    expect(fs.existsSync(p)).toBe(false) // no such literal file — serveThumb 404s
+  })
+
+  it('still rejects single-encoded traversal (%2e%2e%2f -> ../)', () => {
+    expect(() => safeResolve(root, '%2e%2e%2fsecret.txt')).toThrow(/traversal/)
+  })
+
+  it('decodes exactly once — a name with a single-encoded percent resolves literally', () => {
+    // A tile literally named `img%41.png` is single-encoded by producers to
+    // `img%2541.png`. One decode must yield `img%41.png` (not `imgA.png`).
+    fs.writeFileSync(path.join(root, 'img%41.png'), 'literal-percent')
+    const p = safeResolve(root, 'img%2541.png')
+    expect(path.basename(p)).toBe('img%41.png')
+    expect(fs.readFileSync(p, 'utf8')).toBe('literal-percent')
   })
 
   it('rejects an absolute path', () => {

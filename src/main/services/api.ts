@@ -1,5 +1,5 @@
 // Token-authed HTTP client to the sidecar (spec §2). Used only by the main process.
-import type { HealthStatus, Job, SearchResponse, Source } from '@shared/types'
+import type { BrowseResponse, HealthStatus, Job, SearchResponse, Source, TileSort } from '@shared/types'
 
 export interface AddSourceResult {
   jobId: string
@@ -57,6 +57,21 @@ export class SidecarClient {
 
   async listSources(): Promise<Source[]> {
     return this.json(await this.fetchImpl(`${this.base()}/sources`, { headers: this.auth() }))
+  }
+
+  async browseTiles(
+    sourceId: string,
+    offset = 0,
+    limit = 100,
+    sort: TileSort = 'name'
+  ): Promise<BrowseResponse> {
+    const q = new URLSearchParams({ offset: String(offset), limit: String(limit), sort })
+    return this.json(
+      await this.fetchImpl(
+        `${this.base()}/sources/${encodeURIComponent(sourceId)}/tiles?${q}`,
+        { headers: this.auth() }
+      )
+    )
   }
 
   async addSource(kind: 'xyz' | 'plain', path: string, embedZoom?: number): Promise<AddSourceResult> {
@@ -173,7 +188,11 @@ export class SidecarClient {
     x: number,
     y: number,
     sources?: string[]
-  ): Promise<{ file: string | null; crop: number[] | null }> {
+  ): Promise<{
+    file: string | null
+    crop: number[] | null
+    composite?: { file: string; dst: number[] }[]
+  }> {
     return this.json(
       await this.fetchImpl(`${this.base()}/tiles/resolve`, {
         method: 'POST',

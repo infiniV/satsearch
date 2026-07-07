@@ -1,28 +1,35 @@
-import { AlertTriangle } from 'lucide-react'
+import { AlertTriangle, RotateCw, WifiOff } from 'lucide-react'
 import type { HealthStatus, SidecarProgress } from '@shared/types'
 import { Mark } from './Mark'
+import { Button } from './ui/button'
+
+const DETAILS: Record<SidecarProgress['phase'], string> = {
+  provisioning: 'First run only — setting up an isolated Python runtime for the GPU sidecar.',
+  syncing:
+    'First run only — downloading the PyTorch + CUDA libraries (~2.5 GB). This is the long part; it’s cached for next time.',
+  building: 'Assembling the environment from the downloaded packages.',
+  starting: 'Launching the local GPU inference process.',
+  downloading: 'First run only — several gigabytes of model weights, cached locally for next time.',
+  loading: 'Placing SigLIP2 on the accelerator. This takes a moment on a cold start.',
+  warming: 'Almost ready — warming the inference kernels.'
+}
 
 export function HealthGate({
   health,
   error,
-  boot
+  boot,
+  onRetry
 }: {
   health: HealthStatus | null
   error: string | null
   boot: SidecarProgress | null
+  onRetry?: () => void
 }) {
   if (health?.ready) return null
 
   const label = boot?.label ?? 'Starting the sidecar'
   const pct = boot?.pct ?? null
-  const detail =
-    boot?.phase === 'downloading'
-      ? 'First run only — several gigabytes of model weights, cached locally for next time.'
-      : boot?.phase === 'loading'
-        ? 'Placing SigLIP2 on the accelerator. This takes a moment on a cold start.'
-        : boot?.phase === 'warming'
-          ? 'Almost ready — warming the inference kernels.'
-          : 'Launching the local GPU inference process.'
+  const detail = (boot && DETAILS[boot.phase]) ?? 'Launching the local GPU inference process.'
 
   return (
     <div className="canvas fixed inset-0 z-50 flex items-center justify-center">
@@ -33,7 +40,7 @@ export function HealthGate({
         </div>
 
         {error ? (
-          <ErrorPanel error={error} />
+          <ErrorPanel error={error} onRetry={onRetry} />
         ) : (
           <div className="w-full space-y-6">
             <div className="space-y-2">
@@ -72,24 +79,39 @@ function BootBar({ pct }: { pct: number | null }) {
   )
 }
 
-function ErrorPanel({ error }: { error: string }) {
+function ErrorPanel({ error, onRetry }: { error: string; onRetry?: () => void }) {
+  // First-run provisioning surfaces a network-specific message; show a friendlier
+  // heading + icon for it (the raw detail is still in the log below).
+  const offline = /internet connection|check your connection/i.test(error)
   return (
     <div className="w-full space-y-4">
       <div className="space-y-2">
         <div className="flex items-center gap-2 text-destructive">
-          <AlertTriangle className="h-5 w-5" />
+          {offline ? <WifiOff className="h-5 w-5" /> : <AlertTriangle className="h-5 w-5" />}
           <h1 className="text-lg font-semibold tracking-tight text-foreground">
-            The GPU sidecar couldn’t start
+            {offline ? 'First run needs an internet connection' : 'The GPU sidecar couldn’t start'}
           </h1>
         </div>
         <p className="text-sm leading-relaxed text-muted-foreground">
-          Check that the Python sidecar and CUDA drivers are installed — see{' '}
-          <span className="font-medium text-foreground">docs/HOW-TO-RUN.md</span>.
+          {offline ? (
+            'The first launch downloads the GPU runtime and model (~5–6 GB), then runs fully offline. Reconnect and retry.'
+          ) : (
+            <>
+              Check that an NVIDIA GPU + CUDA drivers are present — see{' '}
+              <span className="font-medium text-foreground">docs/HOW-TO-RUN.md</span>.
+            </>
+          )}
         </p>
       </div>
       <pre className="max-h-40 w-full overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-[0.6875rem] leading-relaxed text-muted-foreground">
         {error}
       </pre>
+      {onRetry && (
+        <Button variant="outline" size="sm" onClick={onRetry} className="gap-2">
+          <RotateCw className="h-3.5 w-3.5" />
+          Retry
+        </Button>
+      )}
     </div>
   )
 }

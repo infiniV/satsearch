@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  app:
+    name: App (typecheck + vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      # Vitest covers the main-process logic (sidecar lifecycle, provisioning
+      # helpers, path guard, API client) hermetically — no sidecar or GPU needed.
+      - name: Test
+        run: pnpm test
+
+  sidecar:
+    name: Sidecar (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      # CPU-only: install the core + dev groups (no `gpu` group), so the multi-GB
+      # CUDA torch wheels are never downloaded. The unit tests mock the model.
+      - name: Sync sidecar (no GPU)
+        working-directory: sidecar
+        run: uv sync --group dev
+
+      - name: Pytest
+        working-directory: sidecar
+        run: uv run pytest

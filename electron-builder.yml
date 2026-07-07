@@ -4,9 +4,12 @@ directories:
   buildResources: build
   output: dist
 
-# The Python sidecar (source + CI-pre-built .venv) ships as extraResources — NOT inside
-# the asar. child_process.spawn cannot execute an interpreter packed in app.asar
-# (research §3). Accessed at runtime via process.resourcesPath/sidecar.
+# Distribution model: thin installer + first-run `uv` bootstrap (docs/DISTRIBUTION.md).
+# We ship the sidecar *source* + the bundled `uv` binary as extraResources — NOT a
+# prebuilt venv (a CI-built venv is not relocatable) and NOT inside the asar
+# (child_process.spawn cannot execute an interpreter packed in app.asar). On first
+# run the app runs `uv sync` into a writable dir under userData. Accessed at runtime
+# via process.resourcesPath/{sidecar,bin}.
 files:
   - out/**
   - package.json
@@ -17,9 +20,16 @@ extraResources:
     to: sidecar
     filter:
       - '**/*'
+      - '!.venv/**' # never ship a dev/CI venv — it is not relocatable
       - '!**/__pycache__/**'
       - '!**/*.pyc'
       - '!**/tests/**'
+      - '!.pytest_cache/**'
+  # The `uv` binary, downloaded per-target-OS by scripts/fetch-uv.mjs before packaging.
+  - from: resources/bin
+    to: bin
+    filter:
+      - '**/*'
 
 # Native .node addons (sharp) must be unpacked so they can be loaded at runtime.
 asarUnpack:
