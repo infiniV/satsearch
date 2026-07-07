@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, RotateCw, WifiOff } from 'lucide-react'
 import type { HealthStatus, SidecarProgress } from '@shared/types'
+import { cn } from '@/lib/utils'
 import { Mark } from './Mark'
 import { Button } from './ui/button'
 
@@ -68,7 +69,7 @@ export function HealthGate({
               </div>
             </div>
 
-            <LogTail lines={logs} />
+            <LogTail lines={logs} obscured />
           </div>
         )}
 
@@ -96,8 +97,10 @@ function fmtElapsed(s: number): string {
 }
 
 /** Live tail of the setup log (uv + sidecar), auto-scrolled to the newest line, so the
- *  user can always see something is happening and spot a stall. */
-function LogTail({ lines }: { lines: string[] }) {
+ *  user can always see something is happening and spot a stall. When `obscured`, the log
+ *  still scrolls (you can see it's working) but sits behind a glossy glass sheet so the
+ *  raw lines aren't legible — motion, not detail. Errors pass it plain, to stay readable. */
+function LogTail({ lines, obscured = false }: { lines: string[]; obscured?: boolean }) {
   const ref = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const el = ref.current
@@ -111,15 +114,33 @@ function LogTail({ lines }: { lines: string[] }) {
       <p className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground/60">
         Activity
       </p>
-      <div
-        ref={ref}
-        className="h-36 w-full overflow-auto rounded-md border border-border bg-muted/40 p-2.5 font-mono text-[0.6875rem] leading-relaxed text-muted-foreground"
-      >
-        {shown.map((l, i) => (
-          <div key={i} className="whitespace-pre-wrap break-all">
-            {l}
+      <div className="relative h-36 w-full overflow-hidden rounded-md">
+        <div
+          ref={ref}
+          className={cn(
+            'h-full w-full overflow-auto p-2.5 font-mono text-[0.6875rem] leading-relaxed text-muted-foreground',
+            obscured
+              ? 'select-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
+              : 'rounded-md border border-border bg-muted/40'
+          )}
+        >
+          {shown.map((l, i) => (
+            <div key={i} className="whitespace-pre-wrap break-all">
+              {l}
+            </div>
+          ))}
+        </div>
+        {obscured && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute inset-0 rounded-md border border-white/10 bg-white/[0.02] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.08)] backdrop-blur-[8px] backdrop-saturate-150"
+          >
+            {/* faint diagonal gloss so it still reads as glass, no bright band */}
+            <div className="absolute inset-0 rounded-md bg-gradient-to-br from-white/[0.05] via-transparent to-white/[0.02]" />
+            {/* continuous fade: dimmed from the top, dissolving into the dark at the base */}
+            <div className="absolute inset-0 rounded-md bg-gradient-to-b from-background/35 via-background/65 to-background/95" />
           </div>
-        ))}
+        )}
       </div>
     </div>
   )
