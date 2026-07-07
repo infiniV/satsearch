@@ -111,11 +111,6 @@ export interface ProvisionCallbacks {
   onLog?: (line: string) => void
 }
 
-// Rough total download for the `gpu` group (torch + the nvidia-*-cu12 wheels + the
-// managed CPython). Only used to turn the live cache-size counter into an approximate
-// percentage; the "N MB" figure itself is exact.
-const ESTIMATED_SYNC_BYTES = 2.6e9
-
 /** Ensure a ready venv exists under `runtimeDir`, running `uv sync` only when needed.
  *  Returns the interpreter path to spawn the sidecar with. Emits progress + logs during
  *  a real sync; returns near-instantly (no network) on the idempotent fast path. */
@@ -193,8 +188,10 @@ function runUvSync(opts: ProvisionOptions, cb: ProvisionCallbacks): Promise<void
     const args = ['sync', '--frozen', '--inexact', '--group', 'gpu', '--project', opts.projectDir]
     const child = spawn(opts.uvBin, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
 
-    // uv over a pipe emits no byte %, so measure the cache growing on disk to give a
-    // real, moving "N MB downloaded" counter. Stops once installs begin (building).
+    // uv gives no reliable overall %, so keep the bar indeterminate and instead show a
+    // real, moving byte counter measured from the cache growing on disk (this proves
+    // work is happening; the per-package lines in the log show exactly what). Stops
+    // once installs begin (building).
     let downloading = true
     const poll = setInterval(() => {
       if (!downloading) return
@@ -203,7 +200,7 @@ function runUvSync(opts: ProvisionOptions, cb: ProvisionCallbacks): Promise<void
       cb.onProgress?.({
         phase: 'syncing',
         label: 'Downloading GPU libraries',
-        pct: Math.min(99, Math.round((bytes / ESTIMATED_SYNC_BYTES) * 100)),
+        pct: null,
         note: `${fmtBytes(bytes)} downloaded`
       })
     }, 1500)

@@ -7,7 +7,7 @@ import { Button } from './ui/button'
 const DETAILS: Record<SidecarProgress['phase'], string> = {
   provisioning: 'First run only — setting up an isolated Python runtime for the GPU sidecar.',
   syncing:
-    'First run only — downloading the PyTorch + CUDA libraries (~2.5 GB). This is the long part; it’s cached for next time.',
+    'First run only — downloading PyTorch + the CUDA libraries. This is the long part; it’s cached for next time.',
   building: 'Assembling the environment from the downloaded packages.',
   starting: 'Launching the local GPU inference process.',
   downloading: 'First run only — several gigabytes of model weights, cached locally for next time.',
