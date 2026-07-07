@@ -48,3 +48,8 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+
+# On a git tag, electron-builder would otherwise try to publish to GitHub itself
+# (and fail without GH_TOKEN). The release workflow's `release` job owns uploading
+# the artifacts to the GitHub Release instead.
+publish: null
