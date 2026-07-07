@@ -91,6 +91,8 @@ export interface Job {
   snapshotId?: string
   /** Most-recently embedded tile rel_path — drives the live preview thumbnail. */
   current?: string
+  /** Live embedding throughput (tiles/second), refreshed on the progress cadence. */
+  tilesPerSec?: number | null
 }
 
 export type Mutation = 'add' | 'import' | 'delete' | 'relink' | 'reembed'
@@ -125,6 +127,12 @@ export interface HealthStatus {
   sidecarVersion: string
   vram?: number | null
   ram?: number | null
+  /** GPU model name (e.g. "NVIDIA GeForce RTX 3060"), or "cpu". */
+  gpuName?: string | null
+  /** CUDA compute capability, e.g. "8.6". */
+  capability?: string | null
+  /** Auto-resolved embed batch size for this GPU (null = CPU fallback). */
+  batchSize?: number | null
   error?: string
 }
 

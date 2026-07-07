@@ -60,7 +60,10 @@ function IngestRow({ job }: { job: Job }) {
 
         <div className="flex items-center justify-between gap-2 font-mono text-[0.6875rem] text-muted-foreground/70">
           <span className="truncate">{current ?? 'preparing…'}</span>
-          <span className="tnum shrink-0">{pct.toFixed(1)}%</span>
+          <span className="tnum flex shrink-0 items-center gap-2">
+            {job.tilesPerSec ? <span>{Math.round(job.tilesPerSec)} tiles/s</span> : null}
+            <span>{pct.toFixed(1)}%</span>
+          </span>
         </div>
       </div>
     </div>

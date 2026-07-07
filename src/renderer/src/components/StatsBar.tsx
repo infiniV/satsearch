@@ -28,8 +28,10 @@ export function StatsBar({
         />
         <Cpu className="h-3.5 w-3.5" />
         {health ? (
-          <span className="tnum">
-            {health.device} · {health.dims}-d · {health.fingerprint.slice(0, 8)}
+          <span className="tnum" title={health.gpuName ?? undefined}>
+            {health.gpuName ?? health.device}
+            {health.batchSize ? ` · batch ${health.batchSize}` : ''} · {health.dims}-d ·{' '}
+            {health.fingerprint.slice(0, 8)}
           </span>
         ) : (
           <span>offline</span>

@@ -31,6 +31,8 @@ class Job(BaseModel):
     # Most-recently embedded tile (sourceId, rel_path) — drives the live preview
     # thumbnail in the ingest UI. None until the first batch completes.
     current: Optional[str] = None
+    # Live embedding throughput (tiles/second), refreshed on the progress cadence.
+    tilesPerSec: Optional[float] = None
 
 
 class SourceMutationEvent(BaseModel):

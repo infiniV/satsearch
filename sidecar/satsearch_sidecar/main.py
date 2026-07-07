@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from datetime import datetime, timezone
 
-from . import geo, ingest as ingest_mod, maintenance
+from . import geo, gpu, ingest as ingest_mod, maintenance
 from .config import Config
 from .ingest import run_ingest
 from .jobs import Jobs
@@ -44,6 +44,17 @@ class Deps:
     registry: SourceRegistry
     jobs: Jobs
     labels: LabelStore
+    # GPU adaptation: auto-resolved once at startup (0/None ⇒ CPU-safe fallback).
+    batch_size: Optional[int] = None
+    gpu_info: Optional["gpu.DeviceInfo"] = None
+    autotune_cache: Optional[str] = None
+    autotune_key: Optional[str] = None
+
+    def note_downgrade(self, new_batch: int) -> None:
+        """OOM safety net lowered the batch mid-run — persist it so we don't re-probe high."""
+        self.batch_size = new_batch
+        if self.autotune_cache and self.autotune_key:
+            gpu.cache_put(self.autotune_cache, self.autotune_key, new_batch)
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -86,6 +97,7 @@ def create_app(deps: Deps) -> FastAPI:
     # ---- health ----------------------------------------------------------
     @app.get("/health")
     def health():
+        info = d.gpu_info
         return {
             "ready": True,
             "phase": "ready",
@@ -93,7 +105,10 @@ def create_app(deps: Deps) -> FastAPI:
             "dims": d.model.dims,
             "fingerprint": d.model.fingerprint,
             "sidecarVersion": os.environ.get("SATSEARCH_SIDECAR_VERSION", "dev"),
-            "vram": None,
+            "gpuName": info.name if info else None,
+            "vram": info.vram_total if info else None,
+            "capability": info.capability if info else None,
+            "batchSize": d.batch_size,
             "ram": None,
         }
 
@@ -216,7 +231,8 @@ def create_app(deps: Deps) -> FastAPI:
                         # re-read the patched source so ingest embeds the right zoom
                         source.minZoom, source.maxZoom = min(zs), max(zs)
                         source.embedZoom = source.embedZoom or max(zs)
-                run_ingest(source, d.model, d.store, d.jobs, emb_dir, job_id)
+                run_ingest(source, d.model, d.store, d.jobs, emb_dir, job_id,
+                           batch_size=d.batch_size, on_downgrade=d.note_downgrade)
                 job = d.jobs.get(job_id)
                 d.registry.patch(sid, tileCount=job.done if job else 0)
             except Exception as e:  # pragma: no cover
@@ -262,7 +278,8 @@ def create_app(deps: Deps) -> FastAPI:
             try:
                 import shutil
                 shutil.rmtree(new_dir, ignore_errors=True)
-                run_ingest(src, d.model, d.store, d.jobs, new_dir, job_id, kind="reembed")
+                run_ingest(src, d.model, d.store, d.jobs, new_dir, job_id, kind="reembed",
+                           batch_size=d.batch_size, on_downgrade=d.note_downgrade)
                 shutil.rmtree(emb_dir, ignore_errors=True)
                 os.replace(new_dir, emb_dir)
                 d.registry.patch(source_id, fingerprint=d.model.fingerprint,
@@ -325,7 +342,8 @@ def create_app(deps: Deps) -> FastAPI:
                     src = importer.make_fresh_satimg_source(
                         sid, city, path, d.model.fingerprint)
                     run_ingest(src, d.model, d.store, d.jobs, out_emb_dir, job_id,
-                               kind="import")
+                               kind="import", batch_size=d.batch_size,
+                               on_downgrade=d.note_downgrade)
                     src.tileCount = d.jobs.get(job_id).total
                     d.registry.add(src)
             except Exception as e:
@@ -442,6 +460,18 @@ def build_default_app() -> FastAPI:  # pragma: no cover — real entrypoint (nee
     registry = SourceRegistry(config.sources_json)
     jobs = Jobs()
     labels = LabelStore(os.path.join(config.data_dir, "labels"))
+
+    # Adapt the embed batch to whatever GPU is present (no hardcoded size). One-time
+    # probe, cached under the data dir; instant on later runs.
+    from .siglip import DEFAULT_IMAGE_SIZE
+    info = gpu.describe_device(config.device)
+    cache_path = os.path.join(config.data_dir, "autotune.json")
+    autotune_key = gpu._cache_key(info, model.fingerprint, DEFAULT_IMAGE_SIZE,
+                                  gpu._torch_version())
+    batch_size = gpu.autotune_batch(model, DEFAULT_IMAGE_SIZE, config.device, cache_path)
+    log.info("device=%s vram=%.1fGB capability=%s → batch=%d",
+             info.name, (info.vram_total or 0) / 1e9, info.capability, batch_size)
+
     # refresh availability (moved/unmounted folders) then hot-load existing sources
     maintenance.check_availability(registry)
     from . import shards
@@ -450,4 +480,6 @@ def build_default_app() -> FastAPI:  # pragma: no cover — real entrypoint (nee
         if blk is not None:
             store.upsert_block(blk)
     return create_app(Deps(config=config, model=model, store=store,
-                           registry=registry, jobs=jobs, labels=labels))
+                           registry=registry, jobs=jobs, labels=labels,
+                           batch_size=batch_size, gpu_info=info,
+                           autotune_cache=cache_path, autotune_key=autotune_key))

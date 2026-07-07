@@ -75,7 +75,27 @@ unauth→401, add source→ingest done 6/6, search→6 results with `app://thumb
   (not asar), sharp asarUnpack
 - `README.md` + `docs/HOW-TO-RUN.md`
 
-## Totals: 64 pytest + 19 vitest = **83 automated tests**, all green. typecheck clean,
+## Phase 5 — Adaptive GPU embed pipeline — ✅ COMPLETE
+Spec: `docs/superpowers/specs/2026-07-08-adaptive-gpu-embed-design.md`
+- `gpu.py` — device describe (`mem_get_info`), pure `choose_batch`, VRAM-headroom
+  `autotune_batch` cached per (gpu, model, image_size, torch) in `<data_dir>/autotune.json`
+  (12 tests). **No hardcoded batch number survives** — env `SATSEARCH_BATCH/NUM_WORKERS/
+  PREFETCH/VRAM_HEADROOM/FLUSH_SECS/COMPILE/AUTOTUNE`, all auto by default.
+- `siglip.py` — `Model.preprocess`/`encode_prepared` split (fake backend falls back to
+  `encode_images`); torch backend uses pinned memory + `channels_last` + `non_blocking`
+  H2D; opt-in `torch.compile`. Vector space unchanged (fingerprint parity → no re-embed).
+- `ingest.py` — thread prefetcher overlaps disk-read + preprocess with GPU forward;
+  OOM safety net (halve + persist lowered ceiling); time-based shard flush (≤30 s ⇒
+  tighter resume) (6 new tests).
+- `main.py`/`jobs.py` — batch auto-resolved once at load; `/health` exposes
+  `gpuName/vram/capability/batchSize`; `Job.tilesPerSec` live throughput.
+- Electron — StatsBar shows GPU name + batch; IngestProgress shows tiles/s.
+- **VERIFIED on RTX 3060 (6 GB), `gpu_smoke.py`:** auto-tune picks **batch 256** (vs old
+  hardcoded 32), peak 3.95 GB within headroom, no OOM, cache re-resolve 0.1 ms. The same
+  code fills a 4090/H200 automatically (memory-gated, capped 4096). Prefetch is neutral on
+  this compute-bound laptop GPU (nothing to overlap) and hides disk/decode on faster GPUs.
+
+## Totals: 97 pytest + 37 vitest = **134 automated tests**, all green. typecheck clean,
 full production bundle builds, live HTTP boot smoke passes.
 
 **Real SigLIP2 CUDA load is now VERIFIED** (RTX 3060, `tests/gpu_smoke.py`) and it caught +

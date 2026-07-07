@@ -8,11 +8,17 @@ Backend contract (duck-typed):
     encode_text(text: str) -> np.ndarray[float32] (dims,)   # UNnormalized ok
     encode_images(pils: list[PIL.Image]) -> np.ndarray[float32] (n, dims)  # UNnormalized ok
 `Model` L2-normalizes outputs and owns calibration + the fingerprint.
+
+Optional (for the overlapped ingest pipeline; the torch backend implements them):
+    preprocess(pils) -> prepared     # CPU-side decode/normalize, runs in worker threads
+    encode_prepared(prepared) -> np.ndarray[float32] (n, dims)  # GPU forward, UNnormalized
+A backend without these (e.g. the test fake) transparently falls back to encode_images.
 """
 
 from __future__ import annotations
 
 import io
+import os
 
 import numpy as np
 
@@ -63,6 +69,21 @@ class Model:
     def encode_images(self, pils) -> np.ndarray:
         return _l2(self._b.encode_images(pils))
 
+    # --- overlapped pipeline: decode/preprocess (worker thread) then GPU forward ------
+    def preprocess(self, pils):
+        """CPU-side prep of a batch. Safe to call off the GPU thread (worker pool).
+
+        Returns an opaque `prepared` object consumed by `encode_prepared`. Falls back to
+        the pils list unchanged when the backend has no split preprocess step."""
+        fn = getattr(self._b, "preprocess", None)
+        return fn(pils) if fn is not None else list(pils)
+
+    def encode_prepared(self, prepared) -> np.ndarray:
+        """GPU forward over a `preprocess` result → L2-normalized rows."""
+        fn = getattr(self._b, "encode_prepared", None)
+        raw = fn(prepared) if fn is not None else self._b.encode_images(prepared)
+        return _l2(raw)
+
 
 # ---------------------------------------------------------------------------
 # Real GPU backend — imported lazily. Not covered by unit tests (needs CUDA).
@@ -74,10 +95,16 @@ def load_model(checkpoint_id: str = DEFAULT_CHECKPOINT, device: str = "cuda") ->
     from transformers import AutoModel, AutoProcessor
     import PIL
 
-    dtype = torch.float16 if device == "cuda" else torch.float32
+    is_cuda = str(device).startswith("cuda")
+    dtype = torch.float16 if is_cuda else torch.float32
     model = AutoModel.from_pretrained(
         checkpoint_id, dtype=dtype, attn_implementation="sdpa"
     ).to(device).eval()
+    if is_cuda:
+        # NHWC layout lets cuDNN pick faster conv/attention kernels on the image tower.
+        model = model.to(memory_format=torch.channels_last)
+        if os.environ.get("SATSEARCH_COMPILE", "0").strip() == "1":
+            model = torch.compile(model)  # opt-in: adds first-batch warmup cost
     processor = AutoProcessor.from_pretrained(checkpoint_id)
     logit_scale = float(model.logit_scale.exp().item())
     logit_bias = float(model.logit_bias.item())
@@ -121,11 +148,23 @@ def load_model(checkpoint_id: str = DEFAULT_CHECKPOINT, device: str = "cuda") ->
                 out = model.get_text_features(**inp).pooler_output
             return out[0].float().cpu().numpy()
 
-        def encode_images(self, pils) -> np.ndarray:
-            with torch.no_grad():
-                inp = processor(images=list(pils), return_tensors="pt").to(device)
-                out = model.get_image_features(**inp).pooler_output
+        def preprocess(self, pils):
+            # CPU-only: decode → resize/normalize → pinned pixel tensor. Runs in worker
+            # threads so disk read + this prep overlap the GPU forward of prior batches.
+            inp = processor(images=list(pils), return_tensors="pt")
+            pv = inp["pixel_values"].contiguous(memory_format=torch.channels_last)
+            if is_cuda:
+                pv = pv.pin_memory()  # page-locked ⇒ async, faster H2D copy
+            return pv
+
+        def encode_prepared(self, pixel_values) -> np.ndarray:
+            with torch.inference_mode():
+                pv = pixel_values.to(device, non_blocking=is_cuda)
+                out = model.get_image_features(pixel_values=pv).pooler_output
             return out.float().cpu().numpy()
+
+        def encode_images(self, pils) -> np.ndarray:
+            return self.encode_prepared(self.preprocess(pils))
 
     backend = _TorchBackend()
     backend.dims = dims

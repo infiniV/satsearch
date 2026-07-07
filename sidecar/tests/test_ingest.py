@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 from PIL import Image
 
@@ -112,6 +114,84 @@ def test_run_ingest_cancel_hot_loads_partial(tmp_path):
     # partial is hot-loaded and searchable (< 10)
     res = store.search(np.ones(8, np.float32), active_fp="fp", limit=100, query_hash="q")
     assert 0 < res["total"] < 10
+
+
+def test_prefetch_preserves_order():
+    groups = iter([[1], [2], [3], [4], [5]])
+    seen = list(ingest._prefetch(groups, prepare=lambda g: [x * 10 for x in g],
+                                 num_workers=3, depth=2))
+    assert [g for g, _ in seen] == [[1], [2], [3], [4], [5]]
+    assert [p for _, p in seen] == [[10], [20], [30], [40], [50]]
+
+
+def _emb_shard_count(emb_dir):
+    return len([f for f in os.listdir(emb_dir) if f.endswith(".parquet")])
+
+
+def test_run_ingest_time_flush_commits_each_batch(tmp_path, monkeypatch):
+    # flush_secs=0 ⇒ commit a shard after every batch → finer resume granularity
+    monkeypatch.setenv("SATSEARCH_FLUSH_SECS", "0")
+    root = tmp_path / "imgs"
+    root.mkdir()
+    for i in range(6):
+        Image.new("RGB", (4, 4)).save(root / f"{i}.jpg")
+    model = Model(FakeBackend(), "fp")
+    store = Store(calibrate=model.calibrate)
+    jobs = Jobs()
+    emb_dir = tmp_path / "emb"
+    src = Source(id="s", label="s", kind="plain", rootPath=str(root),
+                 projection="none", fingerprint="fp")
+    ingest.run_ingest(src, model, store, jobs, str(emb_dir), job_id="j1", batch_size=2)
+    assert jobs.get("j1").state == "done"
+    assert _emb_shard_count(emb_dir) == 3  # 6 tiles / batch 2, one shard per batch
+
+
+class OOMBackend:
+    """Raises a CUDA-OOM-shaped error for any batch larger than `max_ok`."""
+    dims = 8
+    device = "cuda"
+    logit_scale = 1.0
+    logit_bias = 0.0
+
+    def __init__(self, max_ok=2):
+        self.max_ok = max_ok
+
+    def preprocess(self, pils):
+        return list(pils)
+
+    def encode_prepared(self, prepared):
+        if len(prepared) > self.max_ok:
+            raise RuntimeError("CUDA out of memory")
+        return np.random.default_rng(0).standard_normal(
+            (len(prepared), self.dims)).astype(np.float32)
+
+    def encode_images(self, pils):
+        return self.encode_prepared(self.preprocess(pils))
+
+    def encode_text(self, text):
+        return np.ones(self.dims, dtype=np.float32)
+
+
+def test_run_ingest_oom_backoff_downgrades_and_finishes(tmp_path):
+    root = tmp_path / "imgs"
+    root.mkdir()
+    for i in range(8):
+        Image.new("RGB", (4, 4)).save(root / f"{i}.jpg")
+    model = Model(OOMBackend(max_ok=2), "fp")
+    store = Store(calibrate=model.calibrate)
+    jobs = Jobs()
+    emb_dir = tmp_path / "emb"
+    src = Source(id="s", label="s", kind="plain", rootPath=str(root),
+                 projection="none", fingerprint="fp")
+    downgrades = []
+    # start above max_ok so the safety net must kick in
+    ingest.run_ingest(src, model, store, jobs, str(emb_dir), job_id="j1", batch_size=4,
+                      on_downgrade=downgrades.append)
+    job = jobs.get("j1")
+    assert job.state == "done" and job.done == 8   # every tile embedded despite OOM
+    assert downgrades and min(downgrades) <= 2      # dropped to a size that fits
+    res = store.search(np.ones(8, np.float32), active_fp="fp", limit=100, query_hash="q")
+    assert res["total"] == 8
 
 
 def _make_ges(root, n=4):
