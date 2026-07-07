@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Tag, Download, Check } from 'lucide-react'
+import { Tag, Download, Check, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import type { LabelClass } from '@/hooks/useClasses'
 import { Button } from '@/components/ui/button'
@@ -30,6 +30,22 @@ export function LabelsView({
   async function doExport(): Promise<void> {
     const r = await window.api.exportLabels()
     toast.success(`Exported ${r.count} tiles → ${r.dest}`)
+  }
+
+  async function remove(c: LabelClass): Promise<void> {
+    // The sidecar rejects deleting a class that still has tagged tiles (409).
+    if (c.count > 0) {
+      toast.error(`“${c.name}” still has ${c.count} tagged ${c.count === 1 ? 'tile' : 'tiles'} — untag them first`)
+      return
+    }
+    try {
+      await window.api.deleteClass(c.name)
+      if (activeClass === c.name) onSetActive(null)
+      onClassesChanged()
+      toast.success(`Deleted “${c.name}”`)
+    } catch {
+      toast.error(`Couldn't delete “${c.name}”`)
+    }
   }
 
   return (
@@ -74,24 +90,27 @@ export function LabelsView({
         {classes.map((c) => {
           const active = activeClass === c.name
           return (
-            <button
+            <div
               key={c.name}
-              onClick={() => onSetActive(active ? null : c.name)}
               className={cn(
-                'flex items-center justify-between gap-2 rounded-md border px-3 py-2.5 text-left text-sm transition-colors',
+                'group flex items-center gap-1 rounded-md border pr-1 text-sm transition-colors',
                 active
-                  ? 'border-foreground/30 bg-accent text-foreground'
-                  : 'border-border bg-card text-foreground/80 hover:border-border-strong hover:bg-accent/60'
+                  ? 'border-foreground/30 bg-accent'
+                  : 'border-border bg-card hover:border-border-strong hover:bg-accent/60'
               )}
             >
-              <span className="flex min-w-0 items-center gap-2">
+              <button
+                onClick={() => onSetActive(active ? null : c.name)}
+                className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2.5 text-left"
+                title={active ? `Stop tagging with “${c.name}”` : `Tag with “${c.name}”`}
+              >
                 {active ? (
                   <Check className="h-3.5 w-3.5 shrink-0" />
                 ) : (
                   <Tag className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 )}
-                <span className="truncate font-medium">{c.name}</span>
-              </span>
+                <span className="truncate font-medium text-foreground/90">{c.name}</span>
+              </button>
               <span
                 className={cn(
                   'tnum shrink-0 rounded px-1.5 text-[0.6875rem]',
@@ -100,7 +119,15 @@ export function LabelsView({
               >
                 {c.count}
               </span>
-            </button>
+              <button
+                onClick={() => remove(c)}
+                aria-label={`Delete class “${c.name}”`}
+                title={c.count > 0 ? 'Untag its tiles first' : `Delete “${c.name}”`}
+                className="shrink-0 rounded p-1.5 text-muted-foreground/50 transition-colors hover:bg-destructive/15 hover:text-destructive"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
           )
         })}
       </div>

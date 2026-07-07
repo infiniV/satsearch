@@ -157,6 +157,16 @@ export class SidecarClient {
     )
   }
 
+  /** Delete an (empty) class. The sidecar returns 409 if it still has tagged tiles. */
+  async deleteClass(name: string): Promise<{ name: string; count: number }[]> {
+    return this.json(
+      await this.fetchImpl(`${this.base()}/labels/classes/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        headers: this.auth()
+      })
+    )
+  }
+
   async setLabel(sourceId: string, tile: string, label: string): Promise<unknown> {
     return this.json(
       await this.fetchImpl(`${this.base()}/labels`, {

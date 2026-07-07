@@ -43,6 +43,8 @@ const api = {
   getClasses: (): Promise<{ name: string; count: number }[]> => ipcRenderer.invoke('labels:classes'),
   addClass: (name: string): Promise<{ name: string; count: number }[]> =>
     ipcRenderer.invoke('labels:addClass', name),
+  deleteClass: (name: string): Promise<{ name: string; count: number }[]> =>
+    ipcRenderer.invoke('labels:deleteClass', name),
   setLabel: (sourceId: string, tile: string, label: string): Promise<unknown> =>
     ipcRenderer.invoke('labels:set', sourceId, tile, label),
   labelState: (keys: [string, string][]): Promise<Record<string, string>> =>

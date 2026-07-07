@@ -131,6 +131,7 @@ export function registerIpc(getReady: () => Promise<IpcDeps>): void {
 
   on('labels:classes', ({ client }) => client.getClasses())
   on('labels:addClass', ({ client }, name: string) => client.addClass(name))
+  on('labels:deleteClass', ({ client }, name: string) => client.deleteClass(name))
   on('labels:set', ({ client }, sourceId: string, tile: string, label: string) =>
     client.setLabel(sourceId, tile, label)
   )
