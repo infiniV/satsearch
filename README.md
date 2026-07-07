@@ -1,4 +1,8 @@
-# satsearch
+<p align="center">
+  <img src="docs/logo.png" alt="satsearch" width="128" height="128" />
+</p>
+
+<h1 align="center">satsearch</h1>
 
 > Local, GPU-accelerated semantic search over satellite tiles.
 
