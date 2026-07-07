@@ -24,6 +24,8 @@ from typing import Callable
 import numpy as np
 
 K_DEFAULT = 5000
+K_MIN = 1000
+K_MAX = 50000
 BLOCK_ROWS_DEFAULT = 2048  # fp32 upcast buffer ~= BLOCK_ROWS*1152*4 B; keep in L2/L3
 # Below this row count the per-query fp16→fp32 upcast is cheap enough that thread
 # fan-out overhead isn't worth it; above it the upcast dominates and parallelizes well.
@@ -95,6 +97,16 @@ class Store:
         self._snap = IndexSnapshot(blocks=(), snapshot_id="empty-0")
         self._cache: OrderedDict[tuple, tuple] = OrderedDict()
         self._cache_cap = cache_cap
+
+    @property
+    def k(self) -> int:
+        return self._k
+
+    def set_k(self, k: int) -> None:
+        """Change the ranked-list depth. Clears the ranked cache — existing entries
+        were built at the old depth, so a raise must recompute."""
+        self._k = max(K_MIN, min(K_MAX, int(k)))
+        self._cache.clear()
 
     # ---- snapshot management ------------------------------------------------
     def snapshot(self) -> IndexSnapshot:
@@ -280,5 +292,6 @@ class Store:
             "snapshot_id": snap.snapshot_id,
             "from": int(from_),
             "below_window": below_window,
+            "k": int(self._k),
             "results": results,
         }

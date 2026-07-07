@@ -191,3 +191,35 @@ def test_snapshot_id_changes_on_swap():
     id1 = st.swap([make_block("s", "fp", np.eye(2, 1152), ["a", "b"])])
     id2 = st.swap([make_block("s", "fp", np.eye(2, 1152), ["a", "b"])])
     assert id1 != id2
+
+
+def test_search_reports_effective_k():
+    st = identity_store()  # k=5000
+    st.swap([make_block("s", "fp", np.eye(4, 1152), [f"t{i}" for i in range(4)])])
+    res = st.search(_norm(np.ones((1, 1152)))[0], active_fp="fp", limit=10, query_hash="q")
+    assert res["k"] == 5000
+
+
+def test_small_k_truncates_ranked_but_reports_full_total():
+    from satsearch_sidecar.store import Store
+    st = Store(calibrate=lambda c: c, cache_cap=8, k=3, block_rows=2)
+    vecs = np.random.default_rng(0).standard_normal((10, 1152))
+    st.swap([make_block("s", "fp", vecs, [f"t{i}" for i in range(10)])])
+    res = st.search(_norm(np.random.default_rng(1).standard_normal((1, 1152)))[0],
+                    active_fp="fp", limit=100, query_hash="q")
+    assert len(res["results"]) == 3      # ranked list capped at k
+    assert res["total"] == 10            # but total = full candidate count
+    assert res["k"] == 3
+
+
+def test_set_k_clamps_and_clears_cache():
+    from satsearch_sidecar.store import Store, K_MIN, K_MAX
+    st = identity_store()
+    st.swap([make_block("s", "fp", np.eye(4, 1152), [f"t{i}" for i in range(4)])])
+    st.search(_norm(np.ones((1, 1152)))[0], active_fp="fp", limit=4, query_hash="q")
+    assert len(st._cache) == 1
+    st.set_k(10)             # below floor
+    assert st.k == K_MIN
+    assert len(st._cache) == 0
+    st.set_k(10**9)          # above ceiling
+    assert st.k == K_MAX
