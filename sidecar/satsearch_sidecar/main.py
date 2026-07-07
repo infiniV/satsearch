@@ -15,7 +15,7 @@ from typing import Optional
 from urllib.parse import quote
 
 import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from datetime import datetime, timezone
@@ -26,8 +26,9 @@ from .ingest import run_ingest
 from .jobs import Jobs
 from .labels import LabelStore
 from .siglip import Model
+from .settings import AppSettings
 from .sources import Source, SourceRegistry, TileLayout
-from .store import Store
+from .store import Store, K_MIN, K_MAX
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +45,7 @@ class Deps:
     registry: SourceRegistry
     jobs: Jobs
     labels: LabelStore
+    settings: Optional[AppSettings] = None
     # GPU adaptation: auto-resolved once at startup (0/None ⇒ CPU-safe fallback).
     batch_size: Optional[int] = None
     gpu_info: Optional["gpu.DeviceInfo"] = None
@@ -167,7 +169,27 @@ def create_app(deps: Deps) -> FastAPI:
             "storage": {
                 "dataDir": d.config.data_dir,
             },
+            "search": {
+                "k": d.store.k,
+                "kMin": K_MIN,
+                "kMax": K_MAX,
+            },
         }
+
+    @app.post("/settings")
+    async def update_settings(payload: dict = Body(...)):
+        raw = payload.get("searchK")
+        if raw is None:
+            raise HTTPException(400, "searchK is required")
+        try:
+            k = int(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "searchK must be an integer")
+        k = max(K_MIN, min(K_MAX, k))
+        d.store.set_k(k)
+        if d.settings is not None:
+            d.settings.set_search_k(k)
+        return {"k": d.store.k}
 
     # ---- search ----------------------------------------------------------
     @app.post("/search")
@@ -210,6 +232,7 @@ def create_app(deps: Deps) -> FastAPI:
         return {
             "total": res["total"], "snapshotId": res["snapshot_id"], "from": res["from"],
             "belowWindow": res["below_window"],
+            "k": res["k"],
             "results": [serialize(r) for r in res["results"]],
         }
 
@@ -527,7 +550,8 @@ def build_default_app() -> FastAPI:  # pragma: no cover — real entrypoint (nee
     config = Config.from_env()
     config.ensure()
     model = load_model(config.checkpoint, config.device)
-    store = Store(calibrate=model.calibrate)
+    app_settings = AppSettings(config.settings_json)
+    store = Store(calibrate=model.calibrate, k=app_settings.search_k)
     registry = SourceRegistry(config.sources_json)
     jobs = Jobs()
     labels = LabelStore(os.path.join(config.data_dir, "labels"))
@@ -557,5 +581,6 @@ def build_default_app() -> FastAPI:  # pragma: no cover — real entrypoint (nee
         store.swap(blocks)
     return create_app(Deps(config=config, model=model, store=store,
                            registry=registry, jobs=jobs, labels=labels,
+                           settings=app_settings,
                            batch_size=batch_size, gpu_info=info,
                            autotune_cache=cache_path, autotune_key=autotune_key))

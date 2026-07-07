@@ -9,6 +9,7 @@ from satsearch_sidecar.config import Config
 from satsearch_sidecar.jobs import Jobs
 from satsearch_sidecar.labels import LabelStore
 from satsearch_sidecar.main import Deps, create_app
+from satsearch_sidecar.settings import AppSettings
 from satsearch_sidecar.siglip import Model
 from satsearch_sidecar.sources import SourceRegistry
 from satsearch_sidecar.store import Store
@@ -27,13 +28,18 @@ class FakeBackend:
         return np.ones(self.dims, dtype=np.float32)
 
 
+def cfg_k(cfg):
+    return AppSettings(cfg.settings_json).search_k
+
+
 def make_client(tmp_path, token="secret"):
     cfg = Config(data_dir=str(tmp_path / "data"), token=token, device="cpu")
     cfg.ensure()
     model = Model(FakeBackend(), "fp")
-    deps = Deps(config=cfg, model=model, store=Store(calibrate=model.calibrate),
+    deps = Deps(config=cfg, model=model, store=Store(calibrate=model.calibrate, k=cfg_k(cfg)),
                 registry=SourceRegistry(cfg.sources_json), jobs=Jobs(),
-                labels=LabelStore(str(tmp_path / 'labels')))
+                labels=LabelStore(str(tmp_path / 'labels')),
+                settings=AppSettings(cfg.settings_json))
     return TestClient(create_app(deps)), cfg
 
 
@@ -401,3 +407,30 @@ def test_jobs_stream_route_not_shadowed_by_job_id(tmp_path):
     scope = {"type": "http", "method": "GET", "path": "/jobs/stream"}
     winner = next(r for r in client.app.routes if r.matches(scope)[0] == Match.FULL)
     assert winner.endpoint.__name__ == "jobs_stream", winner.endpoint.__name__
+
+
+def test_settings_reports_search_depth(tmp_path):
+    client, _ = make_client(tmp_path)
+    body = client.get("/settings", headers=_auth()).json()
+    assert body["search"] == {"k": 5000, "kMin": 1000, "kMax": 50000}
+
+
+def test_post_settings_updates_and_persists_depth(tmp_path):
+    client, cfg = make_client(tmp_path)
+    r = client.post("/settings", json={"searchK": 20000}, headers=_auth())
+    assert r.status_code == 200 and r.json() == {"k": 20000}
+    # reflected on GET and persisted to disk
+    assert client.get("/settings", headers=_auth()).json()["search"]["k"] == 20000
+    assert AppSettings(cfg.settings_json).search_k == 20000
+
+
+def test_post_settings_clamps(tmp_path):
+    client, _ = make_client(tmp_path)
+    assert client.post("/settings", json={"searchK": 10**9}, headers=_auth()).json() == {"k": 50000}
+    assert client.post("/settings", json={"searchK": 1}, headers=_auth()).json() == {"k": 1000}
+
+
+def test_search_response_includes_k(tmp_path):
+    client, _ = make_client(tmp_path)
+    r = client.post("/search", data={"query": "x"}, headers=_auth())
+    assert r.status_code == 200 and r.json()["k"] == 5000
