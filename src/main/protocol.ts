@@ -32,8 +32,20 @@ export function clearBasemapCache(): void {
 }
 
 export function registerAppScheme(): void {
+  // Must run before app 'ready'. corsEnabled + bypassCSP let the http://localhost
+  // dev renderer load app:// images/fetches without cross-scheme CORS blocks.
   protocol.registerSchemesAsPrivileged([
-    { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
+    {
+      scheme: 'app',
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        corsEnabled: true,
+        stream: true,
+        bypassCSP: true
+      }
+    }
   ])
 }
 
@@ -42,14 +54,21 @@ async function serveThumb(url: URL, sources: SourcesCache): Promise<Response> {
   const sourceId = decodeURIComponent(parts[0] ?? '')
   const relEncoded = parts.slice(1).join('/')
   const root = sources.rootPath(sourceId)
-  if (!root) return new Response('unknown source', { status: 404 })
+  if (!root) {
+    console.warn('[thumb] 404 unknown source:', sourceId, '— known:', sources.ids())
+    return new Response('unknown source', { status: 404 })
+  }
   try {
     const abs = safeResolve(root, relEncoded)
-    if (!fs.existsSync(abs)) return new Response('missing', { status: 404 })
+    if (!fs.existsSync(abs)) {
+      console.warn('[thumb] 404 missing file:', abs)
+      return new Response('missing', { status: 404 })
+    }
     const data = await fs.promises.readFile(abs)
     const type = MIME[path.extname(abs).toLowerCase()] ?? 'application/octet-stream'
     return new Response(new Uint8Array(data), { headers: { 'content-type': type } })
-  } catch {
+  } catch (e) {
+    console.warn('[thumb] 403 forbidden:', root, relEncoded, String(e))
     return new Response('forbidden', { status: 403 })
   }
 }
@@ -80,11 +99,34 @@ async function serveBasemap(url: URL, client: SidecarClient): Promise<Response> 
   return new Response(new Uint8Array(png), { headers: { 'content-type': 'image/png' } })
 }
 
-export function registerAppProtocol(sources: SourcesCache, client: SidecarClient): void {
+// Deps arrive ~50s after the window opens (they need a live sidecar). Register
+// the handler immediately at startup with a lazy holder so the `app://` scheme is
+// always handled — a request before the sidecar is up just gets a 503, never the
+// "unknown scheme" failure that comes from registering the handler too late.
+let _sources: SourcesCache | null = null
+let _client: SidecarClient | null = null
+
+export function setAppProtocolDeps(sources: SourcesCache, client: SidecarClient): void {
+  _sources = sources
+  _client = client
+}
+
+export function registerAppProtocol(): void {
   protocol.handle('app', async (request) => {
     const url = new URL(request.url)
-    if (url.host === 'thumb') return serveThumb(url, sources)
-    if (url.host === 'basemap') return serveBasemap(url, client)
-    return new Response('not found', { status: 404 })
+    try {
+      if (url.host === 'thumb') {
+        if (!_sources) return new Response('starting', { status: 503 })
+        return await serveThumb(url, _sources)
+      }
+      if (url.host === 'basemap') {
+        if (!_client) return new Response('starting', { status: 503 })
+        return await serveBasemap(url, _client)
+      }
+      return new Response('not found', { status: 404 })
+    } catch (e) {
+      console.error('[app] handler error:', request.url, String(e))
+      return new Response('error', { status: 500 })
+    }
   })
 }

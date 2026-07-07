@@ -1,9 +1,40 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import http from 'node:http'
-import { decideAction, probeHealth, getFreePort, computeSidecarVersion } from '../src/main/sidecar'
+import {
+  decideAction,
+  probeHealth,
+  getFreePort,
+  computeSidecarVersion,
+  parseBootLine
+} from '../src/main/sidecar'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+
+describe('parseBootLine', () => {
+  it('parses model weight loading progress', () => {
+    expect(parseBootLine('Loading weights:  46%|████▌ | 406/888 [00:01<00:02]')).toEqual({
+      phase: 'loading',
+      label: 'Loading the model onto the GPU',
+      pct: 46
+    })
+  })
+  it('parses a huggingface download line', () => {
+    expect(parseBootLine('model-00001-of-00002.safetensors:  42%|██  | 1.2G/2.9G')).toEqual({
+      phase: 'downloading',
+      label: 'Downloading the SigLIP2 model',
+      pct: 42
+    })
+  })
+  it('takes the last frame when a chunk holds several', () => {
+    const chunk = 'Loading weights:  10%|# |\rLoading weights:  90%|#########|'
+    expect(parseBootLine(chunk)?.pct).toBe(90)
+  })
+  it('returns null for lines without progress', () => {
+    expect(parseBootLine('model loaded; serving')).toBeNull()
+    expect(parseBootLine('INFO: Uvicorn running')).toBeNull()
+  })
+})
 
 describe('decideAction', () => {
   const lock = { pid: 1, port: 5, token: 't', sidecarVersion: 'v1' }

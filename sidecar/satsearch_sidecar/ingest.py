@@ -172,7 +172,7 @@ def run_ingest(source: Source, model: Model, store: Store, jobs: Jobs,
             st = os.stat(full)
             buf_meta.append((name, rel, x, y, z, int(st.st_mtime), int(st.st_size)))
         done += len(batch)
-        jobs.update(job_id, done=done)
+        jobs.update(job_id, done=done, current=batch[-1][1])
         now = time.monotonic()
         if now - last_progress >= _PROGRESS_EVERY_S:
             log.info("%s progress: source=%s done=%d/%d", kind, source.id, done, total)

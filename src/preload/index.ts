@@ -4,7 +4,8 @@ import type {
   Job,
   SearchResponse,
   Source,
-  SearchParams
+  SearchParams,
+  SidecarProgress
 } from '@shared/types'
 
 type JobsSnapshot = { jobs: Job[]; mutations: unknown[] }
@@ -56,6 +57,11 @@ const api = {
     const h = (_e: unknown, s: string): void => cb(s)
     ipcRenderer.on('health:error', h)
     return () => ipcRenderer.removeListener('health:error', h)
+  },
+  onSidecarProgress: (cb: (p: SidecarProgress) => void): (() => void) => {
+    const h = (_e: unknown, p: SidecarProgress): void => cb(p)
+    ipcRenderer.on('sidecar:progress', h)
+    return () => ipcRenderer.removeListener('sidecar:progress', h)
   }
 }
 

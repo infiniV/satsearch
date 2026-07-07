@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Toaster, toast } from 'sonner'
-import type { HealthStatus, Job, Result, Source } from '@shared/types'
+import type { HealthStatus, Job, Result, Source, SidecarProgress } from '@shared/types'
 import { HealthGate } from './components/HealthGate'
 import { SearchBar } from './components/SearchBar'
 import { ResultsGrid } from './components/ResultsGrid'
@@ -11,8 +11,9 @@ import { LayoutGrid, Map as MapIcon } from 'lucide-react'
 import { Button } from './components/ui/button'
 import { IngestProgress } from './components/IngestProgress'
 import { StatsBar } from './components/StatsBar'
-import { Badge } from './components/ui/badge'
 import { Slider } from './components/ui/slider'
+import { Mark } from './components/Mark'
+import { cn } from './lib/utils'
 
 type Query =
   | { kind: 'text'; query: string }
@@ -22,6 +23,7 @@ type Query =
 export default function App(): React.JSX.Element {
   const [health, setHealth] = useState<HealthStatus | null>(null)
   const [healthError, setHealthError] = useState<string | null>(null)
+  const [boot, setBoot] = useState<SidecarProgress | null>(null)
   const [sources, setSources] = useState<Source[]>([])
   const [jobs, setJobs] = useState<Job[]>([])
   const [results, setResults] = useState<Result[]>([])
@@ -66,12 +68,14 @@ export default function App(): React.JSX.Element {
       refreshSources()
     })
     const offErr = window.api.onHealthError(setHealthError)
+    const offBoot = window.api.onSidecarProgress(setBoot)
     const offJobs = window.api.onJobs((snap) => setJobs(snap.jobs))
     const offSrc = window.api.onSourcesChanged(refreshSources)
     refreshSources().catch(() => {})
     return () => {
       offReady()
       offErr()
+      offBoot()
       offJobs()
       offSrc()
     }
@@ -134,12 +138,15 @@ export default function App(): React.JSX.Element {
   }
 
   return (
-    <div className="flex h-screen flex-col">
-      <HealthGate health={health} error={healthError} />
-      <Toaster position="top-right" />
+    <div className="flex h-screen flex-col bg-background">
+      <HealthGate health={health} error={healthError} boot={boot} />
+      <Toaster position="top-right" theme="dark" />
 
-      <header className="flex items-center justify-between gap-3 border-b px-4 py-3">
-        <h1 className="text-sm font-semibold tracking-tight">satsearch</h1>
+      <header className="flex items-center justify-between gap-3 border-b border-border bg-card/40 px-4 py-2.5">
+        <div className="flex items-center gap-2">
+          <Mark className="h-5 w-5 text-foreground" />
+          <h1 className="text-sm font-semibold tracking-tight text-foreground">SatSearch</h1>
+        </div>
         <div className="flex items-center gap-2">
           <LabelPanel
             classes={classes}
@@ -155,50 +162,69 @@ export default function App(): React.JSX.Element {
         <SearchBar onSearch={onSearch} refTile={refTile} onClearRef={() => setRefTile(null)} busy={busy} />
         <IngestProgress jobs={jobs} />
 
-        <div className="flex flex-wrap items-center gap-2">
-          {sources.map((s) => (
-            <button key={s.id} onClick={() => toggleSource(s.id)}>
-              <Badge
-                className={selected.size && !selected.has(s.id) ? 'opacity-40' : ''}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          {sources.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {sources.map((s) => {
+                const active = selected.has(s.id)
+                const dimmed = selected.size > 0 && !active
+                return (
+                  <button
+                    key={s.id}
+                    onClick={() => toggleSource(s.id)}
+                    className={cn(
+                      'rounded-md border px-2.5 py-1 text-xs font-medium transition-colors',
+                      active
+                        ? 'border-foreground/25 bg-accent text-foreground'
+                        : dimmed
+                          ? 'border-border text-muted-foreground/50 hover:text-muted-foreground'
+                          : 'border-border-strong text-foreground/80 hover:bg-accent'
+                    )}
+                  >
+                    {s.label}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          <div className="ml-auto flex items-center gap-3">
+            <div className="flex items-center gap-0.5 rounded-md border border-border p-0.5">
+              <Button
+                size="icon-sm"
+                variant={view === 'grid' ? 'secondary' : 'ghost'}
+                onClick={() => setView('grid')}
+                title="Grid view"
               >
-                {s.label}
-              </Badge>
-            </button>
-          ))}
-          <div className="ml-auto flex items-center gap-1 rounded-md border p-0.5">
-            <Button
-              size="icon"
-              variant={view === 'grid' ? 'secondary' : 'ghost'}
-              className="h-7 w-7"
-              onClick={() => setView('grid')}
-              title="Grid view"
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </Button>
-            <Button
-              size="icon"
-              variant={view === 'map' ? 'secondary' : 'ghost'}
-              className="h-7 w-7"
-              onClick={() => setView('map')}
-              disabled={!hasGeo}
-              title={hasGeo ? 'Map view' : 'No geolocated results'}
-            >
-              <MapIcon className="h-4 w-4" />
-            </Button>
-          </div>
-          <div className="flex w-64 items-center gap-2">
-            <span className="text-xs text-[var(--muted-foreground)]">score</span>
-            <Slider
-              min={0}
-              max={1}
-              step={0.01}
-              value={scoreRange}
-              onValueChange={(v) => setScoreRange([v[0], v[1]] as [number, number])}
-              onValueCommit={(v) => reRun([v[0], v[1]] as [number, number], selected)}
-            />
-            <span className="w-16 text-right text-xs tabular-nums text-[var(--muted-foreground)]">
-              {scoreRange[0].toFixed(2)}–{scoreRange[1].toFixed(2)}
-            </span>
+                <LayoutGrid />
+              </Button>
+              <Button
+                size="icon-sm"
+                variant={view === 'map' ? 'secondary' : 'ghost'}
+                onClick={() => setView('map')}
+                disabled={!hasGeo}
+                title={hasGeo ? 'Map view' : 'No geolocated results'}
+              >
+                <MapIcon />
+              </Button>
+            </div>
+
+            <div className="flex w-60 items-center gap-2.5">
+              <span className="text-[0.6875rem] uppercase tracking-wide text-muted-foreground">
+                score
+              </span>
+              <Slider
+                min={0}
+                max={1}
+                step={0.01}
+                value={scoreRange}
+                onValueChange={(v) => setScoreRange([v[0], v[1]] as [number, number])}
+                onValueCommit={(v) => reRun([v[0], v[1]] as [number, number], selected)}
+              />
+              <span className="tnum w-[4.5rem] text-right text-xs text-muted-foreground">
+                {scoreRange[0].toFixed(2)}–{scoreRange[1].toFixed(2)}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -206,7 +232,7 @@ export default function App(): React.JSX.Element {
           {view === 'map' && hasGeo ? (
             <MapView results={results} onSelect={onFindSimilar} />
           ) : (
-            <div className="h-full overflow-y-auto">
+            <div className="h-full overflow-y-auto pr-1">
               <ResultsGrid
                 results={results}
                 belowWindow={belowWindow}

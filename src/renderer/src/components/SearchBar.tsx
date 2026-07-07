@@ -1,8 +1,7 @@
 import { useRef, useState } from 'react'
-import { Search, ImageIcon, X } from 'lucide-react'
+import { Search, ImageIcon, X, Sparkles } from 'lucide-react'
 import { Input } from './ui/input'
 import { Button } from './ui/button'
-import { Badge } from './ui/badge'
 
 export function SearchBar({
   onSearch,
@@ -26,7 +25,9 @@ export function SearchBar({
 
   return (
     <div
-      className={`flex items-center gap-2 rounded-lg border p-2 ${dragging ? 'ring-2 ring-[var(--ring)]' : ''}`}
+      className={`relative flex items-center gap-2 rounded-lg border bg-card px-2.5 py-2 shadow-xs transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30 ${
+        dragging ? 'border-foreground/40 ring-2 ring-foreground/10' : 'border-border'
+      }`}
       onDragOver={(e) => {
         e.preventDefault()
         setDragging(true)
@@ -39,24 +40,32 @@ export function SearchBar({
         if (f) handleFile(f)
       }}
     >
-      <Search className="ml-1 h-4 w-4 text-[var(--muted-foreground)]" />
+      <Search className="ml-1 h-4 w-4 shrink-0 text-muted-foreground" />
+
       <Input
-        placeholder="Search tiles — e.g. “brick kiln”, “circular water tank”…"
+        placeholder="Describe a tile — “brick kiln”, “circular water tank”, “solar farm”…"
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === 'Enter' && text.trim()) onSearch({ query: text.trim() })
         }}
-        className="border-0 shadow-none focus-visible:ring-0"
+        className="h-8 border-0 bg-transparent px-1 text-sm shadow-none focus-visible:ring-0"
       />
+
       {refTile && (
-        <Badge className="gap-1">
-          find similar: {refTile.name}
-          <button onClick={onClearRef}>
+        <span className="flex shrink-0 items-center gap-1.5 rounded-md border border-border-strong bg-secondary py-1 pl-2 pr-1 text-xs font-medium text-secondary-foreground">
+          <Sparkles className="h-3 w-3 text-muted-foreground" />
+          <span className="max-w-[10rem] truncate">{refTile.name.split('/').pop()}</span>
+          <button
+            onClick={onClearRef}
+            className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            title="Clear reference"
+          >
             <X className="h-3 w-3" />
           </button>
-        </Badge>
+        </span>
       )}
+
       <input
         ref={fileRef}
         type="file"
@@ -67,12 +76,33 @@ export function SearchBar({
           if (f) handleFile(f)
         }}
       />
-      <Button variant="outline" size="icon" title="Search by image" onClick={() => fileRef.current?.click()}>
+
+      <Button
+        variant="outline"
+        size="icon"
+        className="h-8 w-8 shrink-0"
+        title="Search by image"
+        onClick={() => fileRef.current?.click()}
+      >
         <ImageIcon className="h-4 w-4" />
       </Button>
-      <Button disabled={busy || !text.trim()} onClick={() => text.trim() && onSearch({ query: text.trim() })}>
+
+      <Button
+        className="h-8 shrink-0"
+        disabled={busy || !text.trim()}
+        onClick={() => text.trim() && onSearch({ query: text.trim() })}
+      >
         Search
+        <kbd className="kbd ml-0.5 border-primary-foreground/20 bg-primary-foreground/10 text-primary-foreground/80">
+          ↵
+        </kbd>
       </Button>
+
+      {dragging && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center rounded-lg bg-background/85 text-sm font-medium text-foreground">
+          Drop an image to search by similarity
+        </div>
+      )}
     </div>
   )
 }

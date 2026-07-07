@@ -37,15 +37,18 @@ export function MapView({
     const layer = layerRef.current
     if (!map || !layer) return
     layer.clearLayers()
+    // Pull the live theme token so markers stay in sync with the palette.
+    const css = getComputedStyle(document.documentElement)
+    const signal = css.getPropertyValue('--signal').trim() || '#e8c15a'
     const pts: L.LatLngExpression[] = []
     for (const r of results) {
       if (r.lat == null || r.lon == null) continue
       const marker = L.circleMarker([r.lat, r.lon], {
         radius: 5,
-        color: '#2563eb',
-        weight: 1,
-        fillColor: '#3b82f6',
-        fillOpacity: 0.8
+        color: signal,
+        weight: 1.5,
+        fillColor: signal,
+        fillOpacity: 0.65
       })
       marker.on('click', () => onSelect(r))
       marker.addTo(layer)
@@ -54,5 +57,11 @@ export function MapView({
     if (pts.length) map.fitBounds(L.latLngBounds(pts), { maxZoom: 17, padding: [40, 40] })
   }, [results, onSelect])
 
-  return <div ref={containerRef} className="h-full w-full rounded-lg" style={{ background: '#0b1020' }} />
+  return (
+    <div
+      ref={containerRef}
+      className="h-full w-full overflow-hidden rounded-lg border border-border"
+      style={{ background: 'var(--background)' }}
+    />
+  )
 }

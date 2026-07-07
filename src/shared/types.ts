@@ -64,6 +64,8 @@ export interface Job {
   error?: string
   resumed?: boolean
   snapshotId?: string
+  /** Most-recently embedded tile rel_path — drives the live preview thumbnail. */
+  current?: string
 }
 
 export type Mutation = 'add' | 'import' | 'delete' | 'relink' | 'reembed'
@@ -72,6 +74,14 @@ export interface SourceMutationEvent {
   sourceId: string
   mutation: Mutation
   snapshotId: string
+}
+
+/** Live boot progress parsed from the sidecar's stderr during model load.
+ * `pct` is null while the phase has no measurable progress (spawn / warming). */
+export interface SidecarProgress {
+  phase: 'starting' | 'downloading' | 'loading' | 'warming'
+  label: string
+  pct: number | null
 }
 
 export interface HealthStatus {

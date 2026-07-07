@@ -17,4 +17,9 @@ export class SourcesCache {
   rootPath(sourceId: string): string | undefined {
     return this.roots.get(sourceId)
   }
+
+  /** Known source ids — for diagnostics when a thumb lookup misses. */
+  ids(): string[] {
+    return [...this.roots.keys()]
+  }
 }

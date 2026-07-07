@@ -3,7 +3,12 @@ import path from 'node:path'
 import { SidecarManager } from './sidecar'
 import { SidecarClient } from './services/api'
 import { SourcesCache } from './services/sources'
-import { registerAppScheme, registerAppProtocol, clearBasemapCache } from './protocol'
+import {
+  registerAppScheme,
+  registerAppProtocol,
+  setAppProtocolDeps,
+  clearBasemapCache
+} from './protocol'
 import { registerIpc, type IpcDeps } from './ipc'
 
 registerAppScheme() // must run before app.whenReady()
@@ -57,14 +62,20 @@ async function bootstrap(): Promise<void> {
     /* handled per-invocation; swallow unhandled-rejection if never invoked */
   })
   registerIpc(ready)
+  // Register the app:// handler up front so the scheme is always handled, even
+  // while the sidecar is still loading (deps are attached below once ready).
+  registerAppProtocol()
   createWindow()
+
+  // Stream live boot progress (parsed from the sidecar's stderr) to the renderer.
+  manager.onProgress = (p) => win?.webContents.send('sidecar:progress', p)
 
   try {
     const { port, token } = await manager.ensureReady()
     const client = new SidecarClient(port, token)
     const sources = new SourcesCache(client)
     await sources.refresh()
-    registerAppProtocol(sources, client)
+    setAppProtocolDeps(sources, client)
     resolveReady({ client, sources })
 
     streamCtl = new AbortController()

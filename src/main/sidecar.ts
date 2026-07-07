@@ -7,6 +7,23 @@ import net from 'node:net'
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import type { SidecarProgress } from '@shared/types'
+
+/** Parse a tqdm/huggingface progress line from the sidecar's stderr into a boot
+ * phase + percent. Returns null for lines with no recognizable progress. */
+export function parseBootLine(chunk: string): SidecarProgress | null {
+  // tqdm reprints via \r; a chunk can hold several frames — take the last %.
+  const matches = [...chunk.matchAll(/(\d+)%\|/g)]
+  if (matches.length === 0) return null
+  const pct = Number(matches[matches.length - 1][1])
+  if (/Loading weights/i.test(chunk)) {
+    return { phase: 'loading', label: 'Loading the model onto the GPU', pct }
+  }
+  if (/\.safetensors|\.bin|Downloading|Fetching|Download/i.test(chunk)) {
+    return { phase: 'downloading', label: 'Downloading the SigLIP2 model', pct }
+  }
+  return { phase: 'loading', label: 'Loading the model', pct }
+}
 
 export interface Lock {
   pid: number
@@ -120,6 +137,9 @@ export class SidecarManager {
   port = 0
   token = ''
   version = ''
+  /** Set by the caller to receive live boot progress parsed from stderr. */
+  onProgress?: (p: SidecarProgress) => void
+  private lastPct: number | null = null
 
   constructor(private opts: SidecarOptions) {
     this.version = computeSidecarVersion(opts.sidecarPkgDir)
@@ -158,6 +178,7 @@ export class SidecarManager {
   private async spawn(): Promise<void> {
     this.port = await getFreePort()
     this.token = newToken()
+    this.onProgress?.({ phase: 'starting', label: 'Starting the sidecar', pct: null })
     this.proc = spawn(this.opts.pythonBin, ['-m', 'satsearch_sidecar'], {
       cwd: this.opts.cwd,
       env: {
@@ -171,8 +192,22 @@ export class SidecarManager {
       },
       stdio: ['ignore', 'pipe', 'pipe']
     })
-    this.proc.stdout?.on('data', (d) => console.log('[sidecar]', String(d).trim()))
-    this.proc.stderr?.on('data', (d) => console.error('[sidecar]', String(d).trim()))
+    this.proc.stdout?.on('data', (d) => {
+      const s = String(d)
+      console.log('[sidecar]', s.trim())
+      if (/model loaded|serving/i.test(s)) {
+        this.onProgress?.({ phase: 'warming', label: 'Warming up kernels', pct: null })
+      }
+    })
+    this.proc.stderr?.on('data', (d) => {
+      const s = String(d)
+      console.error('[sidecar]', s.trim())
+      const p = parseBootLine(s)
+      if (p && p.pct !== this.lastPct) {
+        this.lastPct = p.pct
+        this.onProgress?.(p)
+      }
+    })
   }
 
   private async waitHealthy(timeoutMs: number): Promise<void> {

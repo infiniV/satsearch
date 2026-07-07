@@ -28,6 +28,9 @@ class Job(BaseModel):
     error: Optional[str] = None
     resumed: bool = False
     snapshotId: Optional[str] = None
+    # Most-recently embedded tile (sourceId, rel_path) — drives the live preview
+    # thumbnail in the ingest UI. None until the first batch completes.
+    current: Optional[str] = None
 
 
 class SourceMutationEvent(BaseModel):
