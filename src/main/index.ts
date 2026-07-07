@@ -4,7 +4,7 @@ import { SidecarManager } from './sidecar'
 import { SidecarClient } from './services/api'
 import { SourcesCache } from './services/sources'
 import { registerAppScheme, registerAppProtocol, clearBasemapCache } from './protocol'
-import { registerIpc } from './ipc'
+import { registerIpc, type IpcDeps } from './ipc'
 
 registerAppScheme() // must run before app.whenReady()
 
@@ -44,6 +44,19 @@ async function bootstrap(): Promise<void> {
     device: process.env.SATSEARCH_DEVICE || 'cuda'
   })
 
+  // Register IPC + open the window BEFORE the ~30s model load. Handlers await
+  // `ready`, so the renderer's mount-time health/sources/labels calls resolve once
+  // the sidecar is up instead of hitting a missing handler and logging errors.
+  let resolveReady!: (d: IpcDeps) => void
+  let rejectReady!: (e: unknown) => void
+  const ready = new Promise<IpcDeps>((res, rej) => {
+    resolveReady = res
+    rejectReady = rej
+  })
+  ready.catch(() => {
+    /* handled per-invocation; swallow unhandled-rejection if never invoked */
+  })
+  registerIpc(ready)
   createWindow()
 
   try {
@@ -52,7 +65,7 @@ async function bootstrap(): Promise<void> {
     const sources = new SourcesCache(client)
     await sources.refresh()
     registerAppProtocol(sources, client)
-    registerIpc(client, sources)
+    resolveReady({ client, sources })
 
     streamCtl = new AbortController()
     client
@@ -69,6 +82,7 @@ async function bootstrap(): Promise<void> {
 
     win?.webContents.send('health:ready', await client.health())
   } catch (e) {
+    rejectReady(e) // unblock any pending IPC calls; renderer surfaces via health:error
     win?.webContents.send('health:error', String(e))
   }
 }

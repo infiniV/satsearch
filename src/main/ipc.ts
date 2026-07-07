@@ -25,14 +25,36 @@ export function detectKind(dir: string): 'xyz' | 'plain' {
   return 'plain'
 }
 
-export function registerIpc(client: SidecarClient, sources: SourcesCache): void {
-  ipcMain.handle('health', () => client.health())
+export interface IpcDeps {
+  client: SidecarClient
+  sources: SourcesCache
+}
 
-  ipcMain.handle('search', (_e, params) => client.search(params))
+/**
+ * Register all IPC handlers immediately, backed by a `ready` promise that resolves
+ * once the sidecar client + sources cache exist. The renderer mounts and invokes
+ * `health`/`sources:list`/`labels:classes` right away, but the sidecar takes ~30s to
+ * load its model — registering up front (rather than after `ensureReady`) means those
+ * early calls await readiness instead of hitting a missing handler and logging noise.
+ */
+export function registerIpc(ready: Promise<IpcDeps>): void {
+  // Resolve deps per-invocation so calls that land during model load simply wait.
+  const on = <A extends unknown[], R>(
+    channel: string,
+    fn: (deps: IpcDeps, ...args: A) => R | Promise<R>
+  ): void => {
+    ipcMain.handle(channel, async (_e, ...args) => fn(await ready, ...(args as A)))
+  }
 
-  ipcMain.handle('sources:list', () => client.listSources())
+  on('health', ({ client }) => client.health())
 
-  ipcMain.handle('sources:pickAndAdd', async () => {
+  on('search', ({ client }, params: Parameters<SidecarClient['search']>[0]) =>
+    client.search(params)
+  )
+
+  on('sources:list', ({ client }) => client.listSources())
+
+  on('sources:pickAndAdd', async ({ client, sources }) => {
     const win = BrowserWindow.getFocusedWindow() ?? undefined
     const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory'] })
     if (r.canceled || !r.filePaths[0]) return null
@@ -43,13 +65,13 @@ export function registerIpc(client: SidecarClient, sources: SourcesCache): void 
     return { ...res, kind, path: dir }
   })
 
-  ipcMain.handle('sources:delete', async (_e, id: string) => {
+  on('sources:delete', async ({ client, sources }, id: string) => {
     const r = await client.deleteSource(id)
     await sources.refresh()
     return r
   })
 
-  ipcMain.handle('sources:relink', async (_e, id: string) => {
+  on('sources:relink', async ({ client, sources }, id: string) => {
     const win = BrowserWindow.getFocusedWindow() ?? undefined
     const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory'] })
     if (r.canceled || !r.filePaths[0]) return null
@@ -58,10 +80,10 @@ export function registerIpc(client: SidecarClient, sources: SourcesCache): void 
     return res
   })
 
-  ipcMain.handle('sources:reconcile', (_e, id: string) => client.reconcileSource(id))
-  ipcMain.handle('sources:reembed', (_e, id: string) => client.reembedSource(id))
+  on('sources:reconcile', ({ client }, id: string) => client.reconcileSource(id))
+  on('sources:reembed', ({ client }, id: string) => client.reembedSource(id))
 
-  ipcMain.handle('sources:importSatimg', async (_e, checkpoint: string) => {
+  on('sources:importSatimg', async ({ client, sources }, checkpoint: string) => {
     const win = BrowserWindow.getFocusedWindow() ?? undefined
     const r = await dialog.showOpenDialog(win!, { properties: ['openDirectory'] })
     if (r.canceled || !r.filePaths[0]) return null
@@ -70,14 +92,14 @@ export function registerIpc(client: SidecarClient, sources: SourcesCache): void 
     return res
   })
 
-  ipcMain.handle('jobs:list', () => client.listJobs())
-  ipcMain.handle('jobs:cancel', (_e, id: string) => client.cancelJob(id))
+  on('jobs:list', ({ client }) => client.listJobs())
+  on('jobs:cancel', ({ client }, id: string) => client.cancelJob(id))
 
-  ipcMain.handle('labels:classes', () => client.getClasses())
-  ipcMain.handle('labels:addClass', (_e, name: string) => client.addClass(name))
-  ipcMain.handle('labels:set', (_e, sourceId: string, tile: string, label: string) =>
+  on('labels:classes', ({ client }) => client.getClasses())
+  on('labels:addClass', ({ client }, name: string) => client.addClass(name))
+  on('labels:set', ({ client }, sourceId: string, tile: string, label: string) =>
     client.setLabel(sourceId, tile, label)
   )
-  ipcMain.handle('labels:state', (_e, keys: [string, string][]) => client.labelState(keys))
-  ipcMain.handle('labels:export', () => client.exportLabels())
+  on('labels:state', ({ client }, keys: [string, string][]) => client.labelState(keys))
+  on('labels:export', ({ client }) => client.exportLabels())
 }
