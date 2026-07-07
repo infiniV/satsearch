@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import threading
@@ -27,6 +28,8 @@ from .labels import LabelStore
 from .siglip import Model
 from .sources import Source, SourceRegistry, TileLayout
 from .store import Store
+
+log = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -190,6 +193,7 @@ def create_app(deps: Deps) -> FastAPI:
                 job = d.jobs.get(job_id)
                 d.registry.patch(sid, tileCount=job.done if job else 0)
             except Exception as e:  # pragma: no cover
+                log.exception("ingest worker failed: source=%s job=%s", sid, job_id)
                 d.jobs.update(job_id, state="error", error=str(e))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -238,6 +242,7 @@ def create_app(deps: Deps) -> FastAPI:
                                  availability="available")
                 d.registry.bump_rev(source_id)
             except Exception as e:  # pragma: no cover
+                log.exception("reembed worker failed: source=%s job=%s", source_id, job_id)
                 d.jobs.update(job_id, state="error", error=str(e))
 
         threading.Thread(target=worker, daemon=True).start()
@@ -297,6 +302,7 @@ def create_app(deps: Deps) -> FastAPI:
                     src.tileCount = d.jobs.get(job_id).total
                     d.registry.add(src)
             except Exception as e:
+                log.exception("satimg import worker failed: source=%s job=%s", sid, job_id)
                 d.jobs.update(job_id, state="error", error=str(e))
 
         threading.Thread(target=worker, daemon=True).start()

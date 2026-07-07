@@ -8,13 +8,17 @@ Electron only trusts the lock after a successful token-authed /health.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import tempfile
 
 import uvicorn
 
 from .config import Config
+from .logging_setup import configure_logging
 from .version import compute_version
+
+log = logging.getLogger("satsearch_sidecar")
 
 
 def _write_lock(config: Config, port: int, token: str, version: str) -> None:
@@ -31,14 +35,19 @@ def _write_lock(config: Config, port: int, token: str, version: str) -> None:
 def main() -> None:
     config = Config.from_env()
     config.ensure()
+    configure_logging(config.log_level)
     port = int(os.environ.get("SATSEARCH_PORT", "8000"))
     version = compute_version()
     os.environ["SATSEARCH_SIDECAR_VERSION"] = version
     _write_lock(config, port, config.token, version)
 
+    log.info("starting sidecar v%s on 127.0.0.1:%d (device=%s, data_dir=%s)",
+             version, port, config.device, config.data_dir)
     from .main import build_default_app
     app = build_default_app()
-    uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
+    log.info("model loaded; serving")
+    # Share our level with uvicorn so app + access logs read consistently.
+    uvicorn.run(app, host="127.0.0.1", port=port, log_level=config.log_level.lower())
 
 
 if __name__ == "__main__":

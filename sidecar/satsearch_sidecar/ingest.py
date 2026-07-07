@@ -8,7 +8,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import time
 
 import numpy as np
 import pandas as pd
@@ -21,8 +23,11 @@ from .siglip import Model
 from .sources import Source
 from .store import Store
 
+log = logging.getLogger(__name__)
+
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
 SHARD_ROWS = 16384
+_PROGRESS_EVERY_S = 5.0  # throttle per-batch INFO progress lines
 
 
 def enumerate_xyz(root: str) -> list[tuple[str, str, int, int, int]]:
@@ -86,7 +91,7 @@ def enumerate_satimg_flat(root: str) -> list[tuple[str, str, int, int, int]]:
         z, x, y = tiles.xyz_from_filename(GES_LAYOUT, "geodetic", xfile, yfile, zfile)
         out.append((fname, fname, x, y, z))
     if skipped:
-        print(f"[ingest] satimg-flat: skipped {skipped} non-ges files under {root}")
+        log.info("satimg-flat: skipped %d non-ges files under %s", skipped, root)
     return sorted(out, key=lambda e: e[1])
 
 
@@ -128,6 +133,9 @@ def run_ingest(source: Source, model: Model, store: Store, jobs: Jobs,
         jobs.update(job_id, total=total, resumed=already > 0)
     jobs.update(job_id, done=already)
 
+    log.info("%s start: source=%s total=%d resumed=%d remaining=%d",
+             kind, source.id, total, already, len(remaining))
+
     buf_emb: list[np.ndarray] = []
     buf_meta: list[tuple] = []
     shard_idx = next_idx
@@ -149,7 +157,10 @@ def run_ingest(source: Source, model: Model, store: Store, jobs: Jobs,
         snap_id = store.upsert_block(block) if block is not None else store.snapshot().snapshot_id
         jobs.update(job_id, state=state, done=done, snapshotId=snap_id)
         jobs.push_mutation(source.id, "import" if kind == "import" else "add", snap_id)
+        log.info("%s %s: source=%s done=%d/%d snapshot=%s",
+                 kind, state, source.id, done, total, snap_id)
 
+    last_progress = time.monotonic()
     for i in range(0, len(remaining), batch_size):
         batch = remaining[i:i + batch_size]
         pils = [Image.open(os.path.join(source.rootPath, rel)).convert("RGB")
@@ -162,6 +173,10 @@ def run_ingest(source: Source, model: Model, store: Store, jobs: Jobs,
             buf_meta.append((name, rel, x, y, z, int(st.st_mtime), int(st.st_size)))
         done += len(batch)
         jobs.update(job_id, done=done)
+        now = time.monotonic()
+        if now - last_progress >= _PROGRESS_EVERY_S:
+            log.info("%s progress: source=%s done=%d/%d", kind, source.id, done, total)
+            last_progress = now
         if sum(len(b) for b in buf_emb) >= SHARD_ROWS:
             flush()
         if jobs.is_cancelled(job_id):

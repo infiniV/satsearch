@@ -12,6 +12,7 @@ class Config:
     token: str
     checkpoint: str = "google/siglip2-so400m-patch16-256"
     device: str = "cuda"
+    log_level: str = "INFO"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -19,7 +20,9 @@ class Config:
         token = os.environ.get("SATSEARCH_TOKEN", "")
         checkpoint = os.environ.get("SATSEARCH_MODEL", "google/siglip2-so400m-patch16-256")
         device = os.environ.get("SATSEARCH_DEVICE", "cuda")
-        return cls(data_dir=data_dir, token=token, checkpoint=checkpoint, device=device)
+        log_level = os.environ.get("SATSEARCH_LOG_LEVEL", "INFO")
+        return cls(data_dir=data_dir, token=token, checkpoint=checkpoint, device=device,
+                   log_level=log_level)
 
     @property
     def sources_json(self) -> str:
