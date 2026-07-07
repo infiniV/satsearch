@@ -33,6 +33,10 @@ class Config:
         """Learned embedding throughput (tiles/s) per device — feeds import time estimates."""
         return os.path.join(self.data_dir, "throughput.json")
 
+    @property
+    def settings_json(self) -> str:
+        return os.path.join(self.data_dir, "settings.json")
+
     def embeddings_dir(self, source_id: str) -> str:
         return os.path.join(self.data_dir, "embeddings", source_id)
 
