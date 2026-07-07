@@ -1,7 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { Cpu, HardDrive, Boxes, Tag, RefreshCw, Lock } from 'lucide-react'
+import { Cpu, HardDrive, Boxes, Tag, RefreshCw, Lock, Search } from 'lucide-react'
+import { toast } from 'sonner'
 import type { SettingsInfo } from '@shared/types'
 import { Button } from '@/components/ui/button'
+import { Slider } from '@/components/ui/slider'
 import { cn } from '@/lib/utils'
 
 /** Read-only settings: what the app is running on. v1 shows the active model, the
@@ -11,6 +13,10 @@ export function SettingsView({ readyTick }: { readyTick: number }) {
   const [info, setInfo] = useState<SettingsInfo | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [depth, setDepth] = useState<number | null>(null)
+  useEffect(() => {
+    if (info) setDepth(info.search.k)
+  }, [info])
 
   const load = () => {
     setLoading(true)
@@ -34,7 +40,7 @@ export function SettingsView({ readyTick }: { readyTick: number }) {
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              What SatSearch is running on. Read-only for now.
+              What SatSearch is running on. Search depth is adjustable below.
             </p>
           </div>
           <Button variant="ghost" size="sm" onClick={load} disabled={loading}>
@@ -93,6 +99,37 @@ export function SettingsView({ readyTick }: { readyTick: number }) {
                 <Row label="Embed batch size" value={`${info.runtime.batchSize}`} />
               )}
               <Row label="Sidecar version" value={info.runtime.sidecarVersion} mono />
+            </Section>
+
+            {/* Search — the one editable knob in v1 */}
+            <Section icon={<Search className="h-4 w-4" />} title="Search">
+              <div className="py-2">
+                <div className="flex items-baseline justify-between gap-4">
+                  <dt className="text-sm text-muted-foreground">Search depth</dt>
+                  <dd className="tnum text-sm text-foreground/90">
+                    {(depth ?? info.search.k).toLocaleString()}
+                  </dd>
+                </div>
+                <p className="mt-1 mb-3 text-xs text-muted-foreground">
+                  How many top matches to rank per query. Higher finds more, costs more time.
+                </p>
+                <Slider
+                  min={info.search.kMin}
+                  max={info.search.kMax}
+                  step={1000}
+                  value={[depth ?? info.search.k]}
+                  onValueChange={(v) => setDepth(v[0])}
+                  onValueCommit={(v) => {
+                    window.api
+                      .setSearchK(v[0])
+                      .then((r) => {
+                        setDepth(r.k)
+                        toast.success(`Search depth set to ${r.k.toLocaleString()}`)
+                      })
+                      .catch((e) => toast.error(String(e)))
+                  }}
+                />
+              </div>
             </Section>
 
             {/* Index + Labels — rolled-up corpus stats */}
