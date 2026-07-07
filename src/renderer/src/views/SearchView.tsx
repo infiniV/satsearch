@@ -1,7 +1,7 @@
 import { type RefObject } from 'react'
-import { LayoutGrid, Map as MapIcon } from 'lucide-react'
+import { LayoutGrid, Map as MapIcon, Loader2 } from 'lucide-react'
 import type { DetailTile, Job, Source } from '@shared/types'
-import type { SearchApi } from '@/hooks/useSearch'
+import { type SearchApi, SEARCH_PAGE } from '@/hooks/useSearch'
 import { SearchBar } from '@/components/SearchBar'
 import { ResultsGrid } from '@/components/ResultsGrid'
 import { MapView } from '@/components/MapView'
@@ -119,6 +119,23 @@ export function SearchView({
               labelState={search.labelState}
               onLabel={onLabel}
             />
+            {search.hasMore && (
+              <div className="flex justify-center py-4">
+                <Button variant="outline" onClick={search.loadMore} disabled={search.loadingMore}>
+                  {search.loadingMore && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Load {SEARCH_PAGE} more ({search.results.length.toLocaleString()} loaded)
+                </Button>
+              </div>
+            )}
+            {!search.hasMore &&
+              search.searchDepthCap != null &&
+              search.results.length >= search.searchDepthCap &&
+              (search.total ?? 0) > search.results.length && (
+                <p className="py-4 text-center text-xs text-muted-foreground">
+                  Showing the top {search.searchDepthCap.toLocaleString()} matches — raise search
+                  depth in Settings for more.
+                </p>
+              )}
           </div>
         )}
       </div>
