@@ -75,6 +75,13 @@ const api = {
     ipcRenderer.on('sidecar:progress', h)
     return () => ipcRenderer.removeListener('sidecar:progress', h)
   },
+  /** Backlog of setup log lines for a renderer that mounts mid-provision. */
+  getSidecarLogs: (): Promise<string[]> => ipcRenderer.invoke('sidecar:logs'),
+  onSidecarLog: (cb: (line: string) => void): (() => void) => {
+    const h = (_e: unknown, line: string): void => cb(line)
+    ipcRenderer.on('sidecar:log', h)
+    return () => ipcRenderer.removeListener('sidecar:log', h)
+  },
   /** Re-attempt sidecar startup after a failed first run (e.g. offline provisioning). */
   retryBoot: (): Promise<void> => ipcRenderer.invoke('sidecar:retry')
 }

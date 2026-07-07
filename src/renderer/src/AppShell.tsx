@@ -16,7 +16,7 @@ import { LabelsView } from './views/LabelsView'
 import { SourcesView } from './views/SourcesView'
 
 export function AppShell(): React.JSX.Element {
-  const { health, error, boot, readyTick, retry } = useHealth()
+  const { health, error, boot, logs, readyTick, retry } = useHealth()
   const { sources, refresh: refreshSources } = useSources(readyTick)
   const jobs = useJobs()
   const { classes, refresh: refreshClasses } = useClasses()
@@ -89,7 +89,7 @@ export function AppShell(): React.JSX.Element {
 
   return (
     <div className="flex h-screen bg-background text-foreground">
-      <HealthGate health={health} error={error} boot={boot} onRetry={retry} />
+      <HealthGate health={health} error={error} boot={boot} logs={logs} onRetry={retry} />
 
       <Rail
         route={route}

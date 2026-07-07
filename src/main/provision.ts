@@ -105,12 +105,23 @@ function readTextOrNull(p: string): string | null {
   }
 }
 
+export interface ProvisionCallbacks {
+  onProgress?: (p: SidecarProgress) => void
+  /** Raw uv output lines, for the live setup log shown on the HealthGate. */
+  onLog?: (line: string) => void
+}
+
+// Rough total download for the `gpu` group (torch + the nvidia-*-cu12 wheels + the
+// managed CPython). Only used to turn the live cache-size counter into an approximate
+// percentage; the "N MB" figure itself is exact.
+const ESTIMATED_SYNC_BYTES = 2.6e9
+
 /** Ensure a ready venv exists under `runtimeDir`, running `uv sync` only when needed.
- *  Returns the interpreter path to spawn the sidecar with. Emits progress during a
- *  real sync; returns near-instantly (no network) on the idempotent fast path. */
+ *  Returns the interpreter path to spawn the sidecar with. Emits progress + logs during
+ *  a real sync; returns near-instantly (no network) on the idempotent fast path. */
 export async function provision(
   opts: ProvisionOptions,
-  onProgress?: (p: SidecarProgress) => void
+  cb: ProvisionCallbacks = {}
 ): Promise<string> {
   const py = venvPython(opts.runtimeDir)
   const currentHash = lockHash(readTextOrNull(path.join(opts.projectDir, 'uv.lock')) ?? '')
@@ -120,8 +131,8 @@ export async function provision(
   if (!needsProvision(sentinel, currentHash, fs.existsSync(py))) return py
 
   fs.mkdirSync(opts.runtimeDir, { recursive: true })
-  onProgress?.({ phase: 'provisioning', label: 'Setting up the Python runtime', pct: null })
-  await runUvSync(opts, onProgress)
+  cb.onProgress?.({ phase: 'provisioning', label: 'Setting up the Python runtime', pct: null })
+  await runUvSync(opts, cb)
   try {
     fs.writeFileSync(sentinelPath, currentHash)
   } catch {
@@ -130,17 +141,47 @@ export async function provision(
   return py
 }
 
-function runUvSync(
-  opts: ProvisionOptions,
-  onProgress?: (p: SidecarProgress) => void
-): Promise<void> {
+/** Total size of a directory tree in bytes (best-effort; ignores unreadable entries). */
+function dirSize(dir: string): number {
+  let total = 0
+  let stack = [dir]
+  while (stack.length) {
+    const d = stack.pop()!
+    let entries: fs.Dirent[]
+    try {
+      entries = fs.readdirSync(d, { withFileTypes: true })
+    } catch {
+      continue
+    }
+    for (const e of entries) {
+      const full = path.join(d, e.name)
+      if (e.isDirectory()) stack.push(full)
+      else {
+        try {
+          total += fs.statSync(full).size
+        } catch {
+          /* transient during download — skip */
+        }
+      }
+    }
+  }
+  return total
+}
+
+function fmtBytes(n: number): string {
+  if (n >= 1e9) return `${(n / 1e9).toFixed(2)} GB`
+  return `${Math.round(n / 1e6)} MB`
+}
+
+function runUvSync(opts: ProvisionOptions, cb: ProvisionCallbacks): Promise<void> {
   return new Promise((resolve, reject) => {
+    const cacheDir = path.join(opts.runtimeDir, 'uv-cache')
     const env = {
       ...process.env,
       // Redirect every writable location uv touches into the app's runtime dir so
       // nothing is written to the read-only resources tree.
       UV_PROJECT_ENVIRONMENT: path.join(opts.runtimeDir, 'venv'),
-      UV_CACHE_DIR: path.join(opts.runtimeDir, 'uv-cache'),
+      UV_CACHE_DIR: cacheDir,
       UV_PYTHON_INSTALL_DIR: path.join(opts.runtimeDir, 'python'),
       // Clean, line-based output we can parse (no animated bars / ANSI).
       UV_NO_PROGRESS: '1',
@@ -152,19 +193,50 @@ function runUvSync(
     const args = ['sync', '--frozen', '--inexact', '--group', 'gpu', '--project', opts.projectDir]
     const child = spawn(opts.uvBin, args, { env, stdio: ['ignore', 'pipe', 'pipe'] })
 
+    // uv over a pipe emits no byte %, so measure the cache growing on disk to give a
+    // real, moving "N MB downloaded" counter. Stops once installs begin (building).
+    let downloading = true
+    const poll = setInterval(() => {
+      if (!downloading) return
+      const bytes = dirSize(cacheDir)
+      if (bytes <= 0) return
+      cb.onProgress?.({
+        phase: 'syncing',
+        label: 'Downloading GPU libraries',
+        pct: Math.min(99, Math.round((bytes / ESTIMATED_SYNC_BYTES) * 100)),
+        note: `${fmtBytes(bytes)} downloaded`
+      })
+    }, 1500)
+
     let tail = ''
+    let lineBuf = ''
     const onData = (d: Buffer): void => {
       const s = String(d)
       tail = (tail + s).slice(-4000)
-      console.log('[provision]', s.trim())
+      // Emit complete lines to the live log.
+      lineBuf += s
+      const lines = lineBuf.split(/\r?\n/)
+      lineBuf = lines.pop() ?? ''
+      for (const ln of lines) {
+        const t = ln.trim()
+        if (t) cb.onLog?.(t)
+      }
       const p = parseUvLine(s)
-      if (p) onProgress?.(p)
+      if (p) {
+        if (p.phase === 'building') downloading = false // installs started; freeze the DL counter
+        cb.onProgress?.(p)
+      }
     }
     child.stdout?.on('data', onData)
     child.stderr?.on('data', onData)
-    child.on('error', (e) =>
+    child.on('error', (e) => {
+      clearInterval(poll)
       reject(new Error(`Could not start the bundled uv (${opts.uvBin}): ${e.message}`))
-    )
-    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(provisionErrorMessage(code, tail)))))
+    })
+    child.on('close', (code) => {
+      clearInterval(poll)
+      if (lineBuf.trim()) cb.onLog?.(lineBuf.trim())
+      code === 0 ? resolve() : reject(new Error(provisionErrorMessage(code, tail)))
+    })
   })
 }

@@ -139,6 +139,8 @@ export class SidecarManager {
   version = ''
   /** Set by the caller to receive live boot progress parsed from stderr. */
   onProgress?: (p: SidecarProgress) => void
+  /** Set by the caller to receive raw sidecar output lines for the live setup log. */
+  onLog?: (line: string) => void
   private lastPct: number | null = null
 
   constructor(private opts: SidecarOptions) {
@@ -195,6 +197,7 @@ export class SidecarManager {
     this.proc.stdout?.on('data', (d) => {
       const s = String(d)
       console.log('[sidecar]', s.trim())
+      this.emitLogLines(s)
       if (/model loaded|serving/i.test(s)) {
         this.onProgress?.({ phase: 'warming', label: 'Warming up kernels', pct: null })
       }
@@ -202,12 +205,25 @@ export class SidecarManager {
     this.proc.stderr?.on('data', (d) => {
       const s = String(d)
       console.error('[sidecar]', s.trim())
+      this.emitLogLines(s)
       const p = parseBootLine(s)
       if (p && p.pct !== this.lastPct) {
         this.lastPct = p.pct
         this.onProgress?.(p)
       }
     })
+  }
+
+  private lastLogLine = ''
+  /** Split a chunk into lines (collapsing \r progress reprints) and forward each
+   *  non-empty line to onLog, skipping consecutive duplicates to avoid flooding. */
+  private emitLogLines(chunk: string): void {
+    for (const raw of chunk.split(/[\r\n]+/)) {
+      const line = raw.trim()
+      if (!line || line === this.lastLogLine) continue
+      this.lastLogLine = line
+      this.onLog?.(line)
+    }
   }
 
   private async waitHealthy(timeoutMs: number): Promise<void> {

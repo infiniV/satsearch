@@ -43,6 +43,15 @@ function sendProgress(p: SidecarProgress): void {
   win?.webContents.send('sidecar:progress', p)
 }
 
+// Ring buffer of setup log lines (uv provisioning + sidecar boot), streamed live to
+// the HealthGate so first run visibly shows what's happening and is never a blank wait.
+const logBuffer: string[] = []
+function sendLog(line: string): void {
+  logBuffer.push(line)
+  if (logBuffer.length > 500) logBuffer.shift()
+  win?.webContents.send('sidecar:log', line)
+}
+
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
@@ -110,6 +119,7 @@ async function bootstrap(): Promise<void> {
   freshReadyGate()
   registerIpc(() => readyGate)
   ipcMain.handle('sidecar:retry', () => retrySidecar())
+  ipcMain.handle('sidecar:logs', () => logBuffer) // backlog for a (re)mounting renderer
   // Register the app:// handler up front so the scheme is always handled, even
   // while the sidecar is still loading (deps are attached below once ready).
   registerAppProtocol()
@@ -126,7 +136,7 @@ async function startSidecar(): Promise<void> {
     const pythonBin = paths.provisioned
       ? await provision(
           { uvBin: paths.uvBin, projectDir: paths.projectDir, runtimeDir: paths.runtimeDir },
-          sendProgress
+          { onProgress: sendProgress, onLog: sendLog }
         )
       : paths.devPython
 
@@ -138,8 +148,9 @@ async function startSidecar(): Promise<void> {
       checkpoint: sidecarEnv.checkpoint,
       device: sidecarEnv.device
     })
-    // Stream live boot progress (uv provisioning + parsed sidecar stderr) to the UI.
+    // Stream live boot progress + raw output (uv provisioning + sidecar stderr) to the UI.
     manager.onProgress = sendProgress
+    manager.onLog = sendLog
 
     const { port, token } = await manager.ensureReady()
     const client = new SidecarClient(port, token)
@@ -165,6 +176,7 @@ async function retrySidecar(): Promise<void> {
   manager?.kill()
   manager = null
   lastBoot = null
+  logBuffer.length = 0
   freshReadyGate()
   await startSidecar()
 }

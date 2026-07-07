@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, RotateCw, WifiOff } from 'lucide-react'
 import type { HealthStatus, SidecarProgress } from '@shared/types'
 import { Mark } from './Mark'
@@ -18,46 +19,107 @@ export function HealthGate({
   health,
   error,
   boot,
+  logs,
   onRetry
 }: {
   health: HealthStatus | null
   error: string | null
   boot: SidecarProgress | null
+  logs: string[]
   onRetry?: () => void
 }) {
-  if (health?.ready) return null
+  const ready = health?.ready === true
+  const elapsed = useElapsed(!ready && !error)
+
+  if (ready) return null
 
   const label = boot?.label ?? 'Starting the sidecar'
   const pct = boot?.pct ?? null
   const detail = (boot && DETAILS[boot.phase]) ?? 'Launching the local GPU inference process.'
+  // Prefer the live sub-status ("1.2 GB downloaded"); append % when we also have one.
+  const status = boot?.note
+    ? boot.note + (pct != null ? ` · ${pct}%` : '')
+    : pct != null
+      ? `${pct}%`
+      : 'working…'
 
   return (
     <div className="canvas fixed inset-0 z-50 flex items-center justify-center">
-      <div className="flex w-full max-w-md flex-col items-start gap-7 px-8">
+      <div className="flex w-full max-w-lg flex-col items-start gap-7 px-8">
         <div className="flex items-center gap-2 text-muted-foreground">
           <Mark className="h-4 w-4" />
           <span className="text-sm font-medium tracking-tight text-foreground">SatSearch</span>
         </div>
 
         {error ? (
-          <ErrorPanel error={error} onRetry={onRetry} />
+          <ErrorPanel error={error} logs={logs} onRetry={onRetry} />
         ) : (
           <div className="w-full space-y-6">
             <div className="space-y-2">
               <h1 className="text-2xl font-semibold tracking-tight">{label}</h1>
-              <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">{detail}</p>
+              <p className="max-w-md text-sm leading-relaxed text-muted-foreground">{detail}</p>
             </div>
 
             <div className="space-y-2.5">
               <BootBar pct={pct} />
-              <p className="tnum text-xs text-muted-foreground">
-                {pct != null ? `${pct}%` : 'working…'}
-              </p>
+              <div className="flex items-center justify-between">
+                <p className="tnum text-xs text-muted-foreground">{status}</p>
+                <p className="tnum text-xs text-muted-foreground/60">{fmtElapsed(elapsed)}</p>
+              </div>
             </div>
+
+            <LogTail lines={logs} />
           </div>
         )}
 
         <Telemetry health={health} error={!!error} />
+      </div>
+    </div>
+  )
+}
+
+/** Seconds elapsed while `running`, for an honest "this is still moving" clock. */
+function useElapsed(running: boolean): number {
+  const [n, setN] = useState(0)
+  useEffect(() => {
+    if (!running) return
+    const t = setInterval(() => setN((v) => v + 1), 1000)
+    return () => clearInterval(t)
+  }, [running])
+  return n
+}
+
+function fmtElapsed(s: number): string {
+  const m = Math.floor(s / 60)
+  const r = s % 60
+  return `${m}:${String(r).padStart(2, '0')}`
+}
+
+/** Live tail of the setup log (uv + sidecar), auto-scrolled to the newest line, so the
+ *  user can always see something is happening and spot a stall. */
+function LogTail({ lines }: { lines: string[] }) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [lines])
+
+  if (lines.length === 0) return null
+  const shown = lines.slice(-80)
+  return (
+    <div className="space-y-1.5">
+      <p className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground/60">
+        Activity
+      </p>
+      <div
+        ref={ref}
+        className="h-36 w-full overflow-auto rounded-md border border-border bg-muted/40 p-2.5 font-mono text-[0.6875rem] leading-relaxed text-muted-foreground"
+      >
+        {shown.map((l, i) => (
+          <div key={i} className="whitespace-pre-wrap break-all">
+            {l}
+          </div>
+        ))}
       </div>
     </div>
   )
@@ -79,7 +141,15 @@ function BootBar({ pct }: { pct: number | null }) {
   )
 }
 
-function ErrorPanel({ error, onRetry }: { error: string; onRetry?: () => void }) {
+function ErrorPanel({
+  error,
+  logs,
+  onRetry
+}: {
+  error: string
+  logs: string[]
+  onRetry?: () => void
+}) {
   // First-run provisioning surfaces a network-specific message; show a friendlier
   // heading + icon for it (the raw detail is still in the log below).
   const offline = /internet connection|check your connection/i.test(error)
@@ -106,6 +176,7 @@ function ErrorPanel({ error, onRetry }: { error: string; onRetry?: () => void })
       <pre className="max-h-40 w-full overflow-auto rounded-md border border-border bg-muted/50 p-3 font-mono text-[0.6875rem] leading-relaxed text-muted-foreground">
         {error}
       </pre>
+      <LogTail lines={logs} />
       {onRetry && (
         <Button variant="outline" size="sm" onClick={onRetry} className="gap-2">
           <RotateCw className="h-3.5 w-3.5" />

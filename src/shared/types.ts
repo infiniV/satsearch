@@ -111,6 +111,9 @@ export interface SidecarProgress {
   phase: 'provisioning' | 'syncing' | 'building' | 'starting' | 'downloading' | 'loading' | 'warming'
   label: string
   pct: number | null
+  /** Live sub-status, e.g. "1.2 GB downloaded" — reassurance that work is happening
+   *  even when a precise percentage isn't available. */
+  note?: string
 }
 
 export interface HealthStatus {
