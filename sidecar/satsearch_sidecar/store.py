@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import hashlib
 import itertools
+import os
 import threading
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -23,7 +25,23 @@ import numpy as np
 
 K_DEFAULT = 5000
 BLOCK_ROWS_DEFAULT = 2048  # fp32 upcast buffer ~= BLOCK_ROWS*1152*4 B; keep in L2/L3
+# Below this row count the per-query fp16→fp32 upcast is cheap enough that thread
+# fan-out overhead isn't worth it; above it the upcast dominates and parallelizes well.
+MATVEC_THREAD_MIN_ROWS = 32768
 _snap_counter = itertools.count(1)
+
+
+def _default_matvec_workers() -> int:
+    env = os.environ.get("SATSEARCH_SEARCH_THREADS", "").strip()
+    if env:
+        try:
+            v = int(env)
+            if v > 0:
+                return v
+        except ValueError:
+            pass
+    # memory-bandwidth-bound past ~8; cap there to avoid BLAS oversubscription.
+    return max(1, min(8, (os.cpu_count() or 2) - 1))
 
 
 @dataclass(frozen=True)
@@ -72,6 +90,7 @@ class Store:
         self._calibrate = calibrate
         self._k = k
         self._block_rows = block_rows
+        self._matvec_workers = _default_matvec_workers()
         self._lock = threading.Lock()
         self._snap = IndexSnapshot(blocks=(), snapshot_id="empty-0")
         self._cache: OrderedDict[tuple, tuple] = OrderedDict()
@@ -113,9 +132,15 @@ class Store:
 
         Backs the gallery browse endpoint — the whole corpus of a source, not just
         search hits. Reads the current immutable snapshot without locking.
+
+        A source is exactly one block, so read it directly (O(block)) instead of
+        scanning the whole corpus's ordinal_meta.
         """
         snap = self._snap
-        return [(name, rel) for (sid, name, rel) in snap.ordinal_meta if sid == source_id]
+        for b in snap.blocks:
+            if b.source_id == source_id:
+                return [(b.names[i], b.rel(i)) for i in range(len(b.names))]
+        return []
 
     def vector_for(self, source_id: str, name: str) -> np.ndarray | None:
         snap = self._snap
@@ -130,21 +155,51 @@ class Store:
         return None
 
     # ---- search -------------------------------------------------------------
-    def _blocked_matvec(self, matrix: np.ndarray, q: np.ndarray) -> np.ndarray:
-        """fp16 matrix (N,D) · fp32 q (D,) via cache-sized fp32 scratch + np.matvec."""
-        n, d = matrix.shape
-        out = np.empty(n, dtype=np.float32)
-        buf = np.empty((min(self._block_rows, n), d), dtype=np.float32)
-        for start in range(0, n, self._block_rows):
-            end = min(start + self._block_rows, n)
+    def _matvec_span(self, matrix: np.ndarray, q: np.ndarray, lo: int, hi: int,
+                     out: np.ndarray) -> None:
+        """Compute out[lo:hi] for one contiguous row span using a reused fp32 buffer.
+
+        Each span owns its buffer, so it is safe to run spans on separate threads —
+        they write disjoint slices of `out`. Peak transient stays fp16-sized: at most
+        workers × block_rows × D × 4 B, not a full-corpus fp32 copy."""
+        d = matrix.shape[1]
+        buf = np.empty((min(self._block_rows, hi - lo), d), dtype=np.float32)
+        for start in range(lo, hi, self._block_rows):
+            end = min(start + self._block_rows, hi)
             chunk = buf[: end - start]
             np.copyto(chunk, matrix[start:end])   # in-place upcast into reused buffer
             out[start:end] = np.matvec(chunk, q)  # BLAS-backed fp32 matvec
+
+    def _blocked_matvec(self, matrix: np.ndarray, q: np.ndarray) -> np.ndarray:
+        """fp16 matrix (N,D) · fp32 q (D,) via cache-sized fp32 scratch + np.matvec.
+
+        The per-query fp16→fp32 upcast is memory-bandwidth-bound and dominates the BLAS
+        matvec; numpy releases the GIL in copyto/matvec, so fanning contiguous spans out
+        across threads cuts wall-clock materially on multi-core hosts. Bit-identical to
+        the serial path (fp16→fp32 is lossless; spans are disjoint)."""
+        n, d = matrix.shape
+        out = np.empty(n, dtype=np.float32)
+        workers = self._matvec_workers
+        if workers <= 1 or n < MATVEC_THREAD_MIN_ROWS:
+            self._matvec_span(matrix, q, 0, n, out)
+            return out
+        # split into `workers` contiguous spans, each aligned to a block_rows boundary
+        span = max(self._block_rows, -(-n // workers))
+        span = -(-span // self._block_rows) * self._block_rows
+        bounds = [(lo, min(lo + span, n)) for lo in range(0, n, span)]
+        with ThreadPoolExecutor(max_workers=min(workers, len(bounds))) as ex:
+            list(ex.map(lambda b: self._matvec_span(matrix, q, b[0], b[1], out), bounds))
         return out
 
     def _ranked(self, snap: IndexSnapshot, q: np.ndarray, active_fp: str,
                 source_ids: set | None):
-        """Return (sorted [(ordinal, score)] up to K, candidate_count)."""
+        """Return (sorted [(ordinal, calibrated_score)] up to K, candidate_count).
+
+        Ranks on **raw cosine** and calibrates only the K survivors: `calibrate` is a
+        strictly-monotonic sigmoid, so it leaves the ordering (and thus the top-K set)
+        unchanged — running it over the whole corpus before selection is wasted work.
+        Selection is O(count) in C (`argpartition`); all Python-level work is O(K).
+        """
         cand_ordinals: list[np.ndarray] = []
         cand_scores: list[np.ndarray] = []
         count = 0
@@ -154,24 +209,25 @@ class Store:
             if source_ids is not None and b.source_id not in source_ids:
                 continue
             n = b.matrix.shape[0]
-            scores = self._calibrate(self._blocked_matvec(b.matrix, q))
-            cand_scores.append(np.asarray(scores, dtype=np.float32))
+            cand_scores.append(self._blocked_matvec(b.matrix, q))  # raw cosine
             cand_ordinals.append(np.arange(off, off + n))
             count += n
         if count == 0:
             return [], 0
-        scores = np.concatenate(cand_scores)
+        scores = np.concatenate(cand_scores)       # raw cosine over all candidates
         ordinals = np.concatenate(cand_ordinals)
         k = min(self._k, count)
-        top = np.argpartition(-scores, k - 1)[:k]
+        top = np.argpartition(-scores, k - 1)[:k]  # K global-array indices (unsorted)
+        top_ord = ordinals[top]                    # K global ordinals
+        top_score = np.asarray(self._calibrate(scores[top]), dtype=np.float32)  # calibrate K
         # sort the K by (-score, source_id, name) — deterministic tiebreak
         meta = snap.ordinal_meta
-        score_by_ord = {int(o): float(s) for o, s in zip(ordinals.tolist(), scores.tolist())}
-        top_sorted = sorted(
-            (int(ordinals[i]) for i in top),
-            key=lambda g: (-score_by_ord[g], meta[g][0], meta[g][1]),
+        order = sorted(
+            range(k),
+            key=lambda i: (-float(top_score[i]), meta[int(top_ord[i])][0],
+                           meta[int(top_ord[i])][1]),
         )
-        return [(g, score_by_ord[g]) for g in top_sorted], count
+        return [(int(top_ord[i]), float(top_score[i])) for i in order], count
 
     def search(self, q, active_fp: str, source_ids=None, min_score=None,
                max_score=None, from_: int = 0, limit: int = 100,

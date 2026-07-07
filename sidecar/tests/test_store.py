@@ -36,6 +36,65 @@ def test_matvec_matches_direct_fp32():
         assert got[n] == pytest.approx(float(ref[i]), abs=1e-3)
 
 
+def test_ranking_matches_bruteforce_with_real_calibration():
+    """Top-K set, order, and scores must match a brute-force reference even when
+    calibrate is a real (non-identity) monotonic sigmoid — guards the raw-cosine
+    ranking + calibrate-only-K optimization."""
+    def calibrate(c):
+        c = np.asarray(c, dtype=np.float32)
+        return 1.0 / (1.0 + np.exp(-(4.0 * c - 1.0)))
+
+    rng = np.random.default_rng(7)
+    n_a, n_b, d, k = 30, 25, 1152, 10
+    va = rng.standard_normal((n_a, d)).astype(np.float32)
+    vb = rng.standard_normal((n_b, d)).astype(np.float32)
+    st = Store(calibrate=calibrate, cache_cap=8, k=k, block_rows=4)
+    st.swap([make_block("a", "fp", va, [f"a{i}" for i in range(n_a)]),
+             make_block("b", "fp", vb, [f"b{i}" for i in range(n_b)])])
+
+    q = _norm(rng.standard_normal((1, d)))[0]
+    res = st.search(q, active_fp="fp", limit=k, query_hash="q")
+
+    # brute-force reference: fp16 corpus upcast → cosine → calibrate → deterministic sort
+    corpus = np.concatenate([_norm(va).astype(np.float16), _norm(vb).astype(np.float16)])
+    meta = [("a", f"a{i}") for i in range(n_a)] + [("b", f"b{i}") for i in range(n_b)]
+    cos = corpus.astype(np.float32) @ q
+    prob = calibrate(cos)
+    ref = sorted(range(len(meta)), key=lambda i: (-float(prob[i]), meta[i][0], meta[i][1]))[:k]
+
+    got = [(r["source_id"], r["name"]) for r in res["results"]]
+    assert got == [meta[i] for i in ref]                       # identical order + set
+    for r, i in zip(res["results"], ref):
+        assert r["score"] == pytest.approx(float(prob[i]), abs=1e-6)  # calibrated score
+    assert res["total"] == n_a + n_b
+
+
+def test_blocked_matvec_threaded_equals_serial():
+    """The multi-threaded span split must be bit-identical to a single-span pass."""
+    rng = np.random.default_rng(3)
+    n, d = 40_000, 1152  # > MATVEC_THREAD_MIN_ROWS so the threaded path engages
+    m = _norm(rng.standard_normal((n, d))).astype(np.float16)
+    q = _norm(rng.standard_normal((1, d)))[0]
+    st = Store(calibrate=lambda c: c, block_rows=2048)
+    st._matvec_workers = 1
+    serial = st._blocked_matvec(m, q)
+    st._matvec_workers = 8
+    threaded = st._blocked_matvec(m, q)
+    assert np.array_equal(serial, threaded)      # exact, not approximate
+    ref = m.astype(np.float32) @ q
+    assert np.allclose(threaded, ref, atol=1e-3)
+
+
+def test_tiles_for_returns_block_rows_with_relpaths():
+    st = identity_store()
+    b = Block(source_id="s", fingerprint="fp",
+              matrix=_norm(np.eye(3, 1152)).astype(np.float16),
+              names=("n0", "n1", "n2"), rel_paths=("r0", "r1", "r2"))
+    st.swap([b, make_block("other", "fp", np.eye(2, 1152), ["x", "y"])])
+    assert st.tiles_for("s") == [("n0", "r0"), ("n1", "r1"), ("n2", "r2")]
+    assert st.tiles_for("missing") == []
+
+
 def test_fingerprint_gating_excludes_mismatched_block():
     st = identity_store()
     st.swap([

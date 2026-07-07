@@ -235,8 +235,15 @@ def run_ingest(source: Source, model: Model, store: Store, jobs: Jobs,
                 for (_n, rel, *_rest) in group]
 
     def prepare(group: list):
-        # runs in a worker thread: disk read + decode + CPU-side model preprocessing
-        return model.preprocess(load_pils(group))
+        # runs in a worker thread: disk read + decode + CPU-side model preprocessing,
+        # plus the per-tile stat — all off the GPU-driving thread.
+        pils, stats = [], []
+        for (_n, rel, *_rest) in group:
+            full = os.path.join(source.rootPath, rel)
+            pils.append(Image.open(full).convert("RGB"))
+            st = os.stat(full)
+            stats.append((int(st.st_mtime), int(st.st_size)))
+        return model.preprocess(pils), stats
 
     def encode_chunked(group: list, chunk: int) -> np.ndarray:
         """Re-encode a group in sub-chunks after an OOM, shrinking until it fits."""
@@ -279,12 +286,11 @@ def run_ingest(source: Source, model: Model, store: Store, jobs: Jobs,
     win_done, win_t0 = 0, time.monotonic()
     pump = _prefetch(groups(), prepare, num_workers, prefetch_depth)
     try:
-        for group, prepared in pump:
+        for group, (prepared, stats) in pump:
             vecs = encode(group, prepared).astype(np.float16)
             buf_emb.append(vecs)
-            for (name, rel, x, y, z) in group:
-                st = os.stat(os.path.join(source.rootPath, rel))
-                buf_meta.append((name, rel, x, y, z, int(st.st_mtime), int(st.st_size)))
+            for (name, rel, x, y, z), (mtime, size) in zip(group, stats):
+                buf_meta.append((name, rel, x, y, z, mtime, size))
             done += len(group)
             win_done += len(group)
 

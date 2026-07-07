@@ -91,9 +91,13 @@ def load_block(dirpath: str, source_id: str, fingerprint: str) -> Block | None:
     if not embs:
         return None
     matrix = np.concatenate(embs, axis=0).astype(np.float16)
-    # normalize (defensive; ingest already normalizes)
-    norms = np.linalg.norm(matrix.astype(np.float32), axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    matrix = (matrix.astype(np.float32) / norms).astype(np.float16)
+    # normalize (defensive; ingest already normalizes). Chunked in-place so the
+    # transient fp32 buffer is one chunk, not two full-corpus copies (~2×9 GB at 2M).
+    _CH = 16384
+    for s in range(0, len(matrix), _CH):
+        e = matrix[s:s + _CH].astype(np.float32)
+        n = np.linalg.norm(e, axis=1, keepdims=True)
+        n[n == 0] = 1.0
+        matrix[s:s + _CH] = (e / n).astype(np.float16)
     return Block(source_id=source_id, fingerprint=fingerprint, matrix=matrix,
                  names=tuple(names), rel_paths=tuple(rels))

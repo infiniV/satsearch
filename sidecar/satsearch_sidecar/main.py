@@ -475,10 +475,15 @@ def build_default_app() -> FastAPI:  # pragma: no cover — real entrypoint (nee
     # refresh availability (moved/unmounted folders) then hot-load existing sources
     maintenance.check_availability(registry)
     from . import shards
+    # Load all sources, then a single swap — each upsert_block rebuilds the whole
+    # snapshot index, so N upserts at startup would be O(N * total).
+    blocks = []
     for s in registry.list():
         blk = shards.load_block(config.embeddings_dir(s.id), s.id, s.fingerprint)
         if blk is not None:
-            store.upsert_block(blk)
+            blocks.append(blk)
+    if blocks:
+        store.swap(blocks)
     return create_app(Deps(config=config, model=model, store=store,
                            registry=registry, jobs=jobs, labels=labels,
                            batch_size=batch_size, gpu_info=info,

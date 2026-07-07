@@ -95,7 +95,26 @@ Spec: `docs/superpowers/specs/2026-07-08-adaptive-gpu-embed-design.md`
   code fills a 4090/H200 automatically (memory-gated, capped 4096). Prefetch is neutral on
   this compute-bound laptop GPU (nothing to overlap) and hides disk/decode on faster GPUs.
 
-## Totals: 97 pytest + 37 vitest = **134 automated tests**, all green. typecheck clean,
+## Phase 6 — Search hot-path performance — ✅ COMPLETE
+Bit-identical results (brute-force + serial-vs-threaded regression tests); **2.8× faster
+uncached search** (500k×1152: 2193 → 774 ms/query, ~1.4 s saved).
+- `store._ranked` — rank on **raw cosine**, calibrate + Python-sort only the **K**
+  survivors (calibrate is monotonic ⇒ ranking unchanged); dropped the full-corpus
+  `{ordinal: score}` dict that was built on every cache miss.
+- `store._blocked_matvec` — the per-query fp16→fp32 upcast is memory-bandwidth-bound and
+  dominates BLAS matvec; now fanned across threads (bounded per-worker fp32 buffers, peak
+  memory unchanged, `SATSEARCH_SEARCH_THREADS` override). ~2.4× on the matvec alone.
+- `store.tiles_for` — O(block) block lookup instead of scanning the whole `ordinal_meta`.
+- `main.build_default_app` — single `store.swap(blocks)` at startup instead of N
+  `upsert_block` (each rebuilds the snapshot index → was O(N·total)).
+- `ingest` — per-tile `os.stat` moved into the prefetch worker, off the GPU-driving thread.
+- `shards.load_block` — chunked in-place renormalize (bounded fp32 scratch vs two
+  full-corpus fp32 copies ≈ 2×9 GB at 2M).
+- Note (deferred, needs your call): exact search at 2M is still multi-second; the bigger
+  12× lever is an fp32-resident corpus (47 ms/query but ~9.4 GB RAM, vs the 16 GB budget)
+  or an opt-in ANN mode. Not taken — memory/latency tradeoff to decide.
+
+## Totals: 100 pytest + 37 vitest = **137 automated tests**, all green. typecheck clean,
 full production bundle builds, live HTTP boot smoke passes.
 
 **Real SigLIP2 CUDA load is now VERIFIED** (RTX 3060, `tests/gpu_smoke.py`) and it caught +
